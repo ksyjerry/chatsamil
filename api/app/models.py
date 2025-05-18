@@ -8,11 +8,16 @@ class ChatMessage(BaseModel):
 
 
 class ImageAnalysisRequest(BaseModel):
-    image_url: str
-    prompt: Optional[str] = "이 이미지에 대해 자세히 설명해주세요."
+    """
+    이미지 분석 요청 모델
+    """
+    image_url: Optional[str] = None
+    prompt: str
     model: Optional[str] = None
-    max_tokens: Optional[int] = 1000
-    detail: Optional[Literal["low", "high", "auto"]] = "auto"
+    max_tokens: int = 1000
+    detail: str = "auto"
+    stream: bool = False
+    conversation_history: Optional[List[ChatMessage]] = None
 
 
 class ImageAnalysisResponse(BaseModel):

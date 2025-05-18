@@ -8,6 +8,7 @@ import os
 from datetime import datetime
 import io
 from PIL import Image
+import json
 
 router = APIRouter()
 
@@ -118,9 +119,14 @@ async def analyze_image_from_url(request: ImageAnalysisRequest):
         request: 이미지 분석 요청 데이터
     
     Returns:
-        ImageAnalysisResponse: 이미지 분석 결과
+        ImageAnalysisResponse: 이미지 분석 결과 또는 StreamingResponse
     """
     try:
+        # 스트리밍 요청인 경우 스트리밍 응답을 반환
+        if request.stream:
+            return await analyze_image(request)
+        
+        # 일반 요청인 경우 표준 응답을 반환
         response = await analyze_image(request)
         return response
     except Exception as e:
@@ -134,7 +140,9 @@ async def analyze_uploaded_image(
     prompt: str = Form("이 이미지에 대해 자세히 설명해주세요."),
     model: Optional[str] = Form(None),
     max_tokens: int = Form(1000),
-    detail: str = Form("auto")
+    detail: str = Form("auto"),
+    stream: bool = Form(False),
+    conversation_history: Optional[str] = Form(None)
 ):
     """
     업로드된 이미지를 분석하고 설명을 반환합니다.
@@ -146,9 +154,11 @@ async def analyze_uploaded_image(
         model: 사용할 모델 ID
         max_tokens: 최대 토큰 수
         detail: 이미지 상세도 (low/high/auto)
+        stream: 스트리밍 응답 반환 여부
+        conversation_history: 이전 대화 기록 (JSON 문자열, 선택적)
     
     Returns:
-        ImageAnalysisResponse: 이미지 분석 결과
+        ImageAnalysisResponse 또는 StreamingResponse: 이미지 분석 결과
     """
     try:
         contents = None
@@ -358,16 +368,28 @@ async def analyze_uploaded_image(
         
         print(f"Debug - Creating ImageAnalysisRequest with model: {model}")
         
+        # 대화 컨텍스트 파싱
+        chat_history = None
+        if conversation_history:
+            try:
+                chat_history = json.loads(conversation_history)
+                print(f"Debug - Conversation history loaded with {len(chat_history)} messages")
+            except Exception as e:
+                print(f"Debug - Error parsing conversation history: {str(e)}")
+                # 오류가 발생해도 계속 진행 (채팅 기록 없이)
+        
         # 이미지 분석 요청 생성
         request = ImageAnalysisRequest(
             image_url=image_url,
             prompt=prompt,
             model=model,
             max_tokens=max_tokens,
-            detail=detail
+            detail=detail,
+            stream=stream,
+            conversation_history=chat_history
         )
         
-        # 이미지 분석
+        # 이미지 분석 (스트리밍 또는 일반 요청)
         response = await analyze_image(request)
             
         return response

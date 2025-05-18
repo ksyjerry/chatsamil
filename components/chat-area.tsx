@@ -91,10 +91,34 @@ export function ChatArea({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // 입력창 참조 추가
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // 메시지 컨테이너 참조 생성
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  // 상태 변화 추적을 위한 ref 추가
+  const prevLoadingRef = useRef<boolean>(false);
+  const prevStreamingRef = useRef<boolean>(false);
+
+  // AI 응답이 끝나면 입력창으로 포커스 이동
+  useEffect(() => {
+    // 이전 상태가 로딩 중이거나 스트리밍 중이었고, 현재는 둘 다 아닌 경우에만 포커스 설정
+    const wasActive = prevLoadingRef.current || prevStreamingRef.current;
+    const isNowInactive = !isLoading && !isStreaming;
+
+    if (wasActive && isNowInactive && inputRef.current) {
+      // 약간의 지연을 두고 포커스 설정 (UI 업데이트 후)
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 300);
+    }
+
+    // 현재 상태를 이전 상태로 저장
+    prevLoadingRef.current = isLoading;
+    prevStreamingRef.current = isStreaming;
+  }, [isLoading, isStreaming]);
 
   // 스크롤을 맨 아래로 이동시키는 함수
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
@@ -333,6 +357,16 @@ export function ChatArea({
       setMessages((prev) => [...prev, userMessage]);
       setInput("");
 
+      // 시스템 메시지 추가 (빈 메시지로 시작)
+      const newMessageId = messages.length + 2;
+      const initialMessage: Message = {
+        id: newMessageId,
+        role: "system",
+        content: "",
+      };
+      setMessages((prev) => [...prev, initialMessage]);
+      setIsStreaming(true);
+
       // FormData 생성
       const formData = new FormData();
       formData.append(
@@ -342,6 +376,19 @@ export function ChatArea({
       formData.append("model", selectedModel.id);
       formData.append("max_tokens", "1000");
       formData.append("detail", "auto");
+      formData.append("stream", "true"); // 스트리밍 활성화
+
+      // 이전 대화 컨텍스트 추가 (이미지 없는 메시지만)
+      const conversationHistory = messages
+        .filter((msg) => !msg.imageUrl)
+        .map((msg) => ({
+          role: msg.role,
+          content: msg.content,
+        }));
+      formData.append(
+        "conversation_history",
+        JSON.stringify(conversationHistory)
+      );
 
       // 이미지 추가: 파일이 있으면 파일로, 없으면 base64 문자열로
       if (imageFile) {
@@ -375,16 +422,64 @@ export function ChatArea({
         throw new Error(errorMessage);
       }
 
-      const data = await response.json();
+      // body가 없으면 에러
+      if (!response.body) {
+        throw new Error("응답 본문이 없습니다.");
+      }
 
-      // 시스템 응답 추가
-      const systemMessage: Message = {
-        id: messages.length + 2,
-        role: "system",
-        content: data.response,
-      };
+      // 스트리밍 응답 처리
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let fullContent = "";
+      let buffer = "";
 
-      setMessages((prev) => [...prev, systemMessage]);
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        // 텍스트 디코딩
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+
+        // 이벤트 스트림 형식 처리 (data: {...}\n\n)
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.trim() === "") continue;
+          if (line.includes("[DONE]")) {
+            setIsStreaming(false);
+            continue;
+          }
+
+          try {
+            // "data: " 접두사 제거
+            const jsonStr = line.replace(/^data: /, "").trim();
+            if (!jsonStr) continue;
+
+            const data = JSON.parse(jsonStr);
+
+            if (data.content) {
+              fullContent += data.content;
+
+              // 실시간으로 메시지 업데이트
+              setMessages((currentMessages) =>
+                currentMessages.map((msg) =>
+                  msg.id === newMessageId
+                    ? { ...msg, content: fullContent }
+                    : msg
+                )
+              );
+            }
+
+            if (data.is_streaming === false) {
+              setIsStreaming(false);
+            }
+          } catch (e) {
+            console.error("JSON 파싱 오류:", e, line);
+          }
+        }
+      }
 
       // 요청이 완료되면 상태 초기화
       setSelectedFile(null);
@@ -399,6 +494,7 @@ export function ChatArea({
           ? err.message
           : "이미지 분석 중 오류가 발생했습니다"
       );
+      setIsStreaming(false);
     } finally {
       setIsLoading(false);
     }
@@ -447,7 +543,9 @@ export function ChatArea({
       // API 호출 데이터 준비
       const requestData = {
         messages: [
-          ...messages.map((msg) => ({ role: msg.role, content: msg.content })),
+          ...messages
+            .filter((msg) => !msg.imageUrl) // 이미지 URL이 없는 메시지만 필터링
+            .map((msg) => ({ role: msg.role, content: msg.content })),
           { role: userMessage.role, content: userMessage.content },
         ],
         model: selectedModel.id,
@@ -622,13 +720,31 @@ export function ChatArea({
         ref={chatContainerRef}
         className="flex-1 overflow-auto p-4 space-y-6 bg-white dark:bg-background"
       >
-        {messages.map((message) => (
-          <ChatMessage
-            key={message.id}
-            message={message}
-            isStreaming={isStreaming && message.id === messages.length}
-          />
-        ))}
+        {messages.map((message, index) => {
+          // 이미지 표시 여부 결정:
+          // 1. 현재 메시지가 사용자 메시지이고 이미지 URL이 있는지 확인
+          // 2. 현재 메시지 이전에 동일한 이미지 URL을 가진 메시지가 있는지 확인
+          // 3. 이전에 동일한 이미지가 없는 경우에만 이미지 표시
+          const isFirstOccurrence =
+            message.role === "user" &&
+            !!message.imageUrl &&
+            !messages
+              .slice(0, index)
+              .some(
+                (prevMsg) =>
+                  prevMsg.imageUrl === message.imageUrl &&
+                  prevMsg.imageUrl !== undefined
+              );
+
+          return (
+            <ChatMessage
+              key={message.id}
+              message={message}
+              isStreaming={isStreaming && message.id === messages.length}
+              showImage={isFirstOccurrence}
+            />
+          );
+        })}
         {isLoading && !isStreaming && (
           <div className="text-center py-2">
             <span className="text-sm text-gray-500 dark:text-gray-400">
@@ -649,7 +765,7 @@ export function ChatArea({
 
       {/* 이미지 미리보기 영역 */}
       {previewUrl && (
-        <div className="p-2 border-t border-gray-200 dark:border-border bg-gray-50 dark:bg-secondary/50">
+        <div className="p-2 bg-gray-50 dark:bg-secondary/50">
           <div className="relative max-w-xs mx-auto">
             <img
               src={previewUrl}
@@ -668,7 +784,7 @@ export function ChatArea({
       )}
 
       {/* Input area */}
-      <div className="border-t border-gray-200 dark:border-border p-4 bg-white dark:bg-background">
+      <div className="p-4 bg-white dark:bg-background">
         <div className="flex gap-2 max-w-3xl mx-auto">
           <input
             type="file"
@@ -696,6 +812,7 @@ export function ChatArea({
           </div>
 
           <Input
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}

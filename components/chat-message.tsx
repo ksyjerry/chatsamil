@@ -16,6 +16,7 @@ interface Message {
 interface ChatMessageProps {
   message: Message;
   isStreaming?: boolean;
+  showImage?: boolean;
 }
 
 // 커스텀 컴포넌트 인터페이스
@@ -28,6 +29,7 @@ interface PreProps {
 export function ChatMessage({
   message,
   isStreaming = false,
+  showImage = false,
 }: ChatMessageProps) {
   const isUser = message.role === "user";
   const [copiedMap, setCopiedMap] = useState<Record<string, boolean>>({});
@@ -125,7 +127,7 @@ export function ChatMessage({
       <div className={`flex-1 ${isUser ? "text-right" : ""}`}>
         {isUser ? (
           <div className="text-gray-700 dark:text-foreground whitespace-pre-line">
-            {message.imageUrl && (
+            {message.imageUrl && showImage && (
               <div
                 className={`mb-2 ${isUser ? "ml-auto" : "mr-auto"} max-w-xs`}
               >
