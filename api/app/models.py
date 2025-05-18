@@ -29,13 +29,39 @@ class ImageAnalysisResponse(BaseModel):
 class ChatRequest(BaseModel):
     messages: List[ChatMessage]
     model: Optional[str] = None
-    temperature: Optional[float] = 0.7
-    max_tokens: Optional[int] = 1000
-    stream: Optional[bool] = False
-    
-    
+    temperature: float = 0.7
+    max_tokens: int = 1000
+    stream: bool = False
+    enable_web_search: Optional[bool] = False
+    search_query: Optional[str] = None
+
+
 class ChatResponse(BaseModel):
     response: str
     model: str
     usage: dict
-    is_streaming: Optional[bool] = False 
+    is_streaming: Optional[bool] = False
+    citations: Optional[List[Dict[str, str]]] = None
+
+
+class WebSearchRequest(BaseModel):
+    query: str
+    model: Optional[str] = None
+    temperature: float = 0.7
+    max_tokens: int = 1000
+    search_context_size: str = "medium"  # "low", "medium", "high"
+    # 예제 user_location:
+    # {
+    #   "country": "KR",
+    #   "city": "Seoul",
+    #   "region": "Seoul",
+    #   "timezone": "Asia/Seoul"
+    # }
+    user_location: Optional[Dict[str, str]] = None
+
+
+class WebSearchResponse(BaseModel):
+    response: str
+    model: Optional[str] = None
+    usage: Optional[Dict[str, Any]] = None
+    citations: Optional[List[Dict[str, str]]] = None 

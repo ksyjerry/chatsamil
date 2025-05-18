@@ -1,6 +1,6 @@
 import openai
 from .config import OPENAI_API_KEY, GPT_MODEL
-from .models import ChatMessage, ChatRequest, ChatResponse, ImageAnalysisRequest, ImageAnalysisResponse
+from .models import ChatMessage, ChatRequest, ChatResponse, ImageAnalysisRequest, ImageAnalysisResponse, WebSearchRequest, WebSearchResponse
 from fastapi.responses import StreamingResponse
 import json
 import asyncio
@@ -19,6 +19,12 @@ async def generate_chat_response(request: ChatRequest) -> ChatResponse:
     Returns:
         ChatResponse: 생성된 응답
     """
+    # 스트리밍 요청이면 스트리밍 응답을 반환
+    if request.stream:
+        # 비동기 이터레이터 생성
+        stream_iterator = await generate_streaming_response(request)
+        return stream_iterator
+    
     try:
         # 모델 설정
         model = request.model or GPT_MODEL
@@ -45,25 +51,88 @@ async def generate_chat_response(request: ChatRequest) -> ChatResponse:
                 "content": msg.content
             })
         
+        # 웹 검색 기능 지원 체크
+        tools = None
+        tool_choice = None
+        if request.enable_web_search:
+            # 웹 검색을 지원하지 않는 모델의 경우 gpt-4.1로 변경
+            if api_model in ["gpt-4o-mini", "gpt-3.5-turbo"]:
+                print(f"Warning: Model {api_model} does not support web search. Using gpt-4.1 instead.")
+                api_model = "gpt-4.1"
+                model = "gpt-4.1"
+            
+            # 웹 검색 도구 설정
+            tools = [{"type": "web_search_preview", 
+                     "user_location": {
+                         "type": "approximate",
+                         "country": "KR",
+                         "city": "Seoul",
+                         "region": "Seoul",
+                         "timezone": "Asia/Seoul"
+                     },
+                     "search_context_size": "medium"
+                     }]
+            tool_choice = {"type": "web_search_preview"}  # 웹 검색 도구를 강제로 사용하도록 설정
+            print(f"Debug - Web search enabled with model: {api_model}")
+            
+            # 특정 검색어가 있는 경우 마지막 메시지를 수정
+            if request.search_query:
+                # 마지막 메시지를 검색어로 변경
+                input_messages[-1]["content"] = request.search_query
+        
+        # API 호출 준비
+        api_params = {
+            "model": api_model,
+            "input": input_messages,
+            "temperature": request.temperature,
+            "max_output_tokens": request.max_tokens
+        }
+        
+        # 웹 검색 도구가 있으면 추가
+        if tools:
+            api_params["tools"] = tools
+        
+        # 도구 선택 설정이 있으면 추가
+        if tool_choice:
+            api_params["tool_choice"] = tool_choice
+        
         # 새로운 응답 API 호출
-        response = client.responses.create(
-            model=api_model,
-            input=input_messages,
-            temperature=request.temperature,
-            max_output_tokens=request.max_tokens
-        )
+        response = client.responses.create(**api_params)
         
         # 응답 파싱
         content = ""
+        citations = []
+        
+        # 웹 검색을 사용했다면 웹 검색 호출 ID 확인 (디버깅용)
+        if request.enable_web_search:
+            web_search_id = None
+            for output in response.output:
+                if output.type == "web_search_call":
+                    web_search_id = output.id
+                    print(f"Debug - Web search call ID: {web_search_id}")
+                    break
+        
         if hasattr(response, 'output_text'):
             content = response.output_text
         else:
-            # 출력 텍스트를 찾을 수 없는 경우
+            # 각 출력 항목 처리
             for output in response.output:
-                if hasattr(output, 'content'):
+                # 웹 검색 결과인 경우
+                if output.type == "message" and hasattr(output, 'content'):
                     for item in output.content:
                         if hasattr(item, 'text'):
                             content += item.text
+                        
+                        # 인용 정보 추출
+                        if hasattr(item, 'annotations'):
+                            for annotation in item.annotations:
+                                if annotation.type == "url_citation":
+                                    citations.append({
+                                        "url": annotation.url,
+                                        "title": annotation.title if hasattr(annotation, 'title') else "",
+                                        "start_index": annotation.start_index,
+                                        "end_index": annotation.end_index
+                                    })
         
         # 사용량 정보
         usage = {}
@@ -74,10 +143,15 @@ async def generate_chat_response(request: ChatRequest) -> ChatResponse:
                 "total_tokens": response.usage.total_tokens
             }
         
+        # 디버그 정보
+        if citations:
+            print(f"Debug - Found {len(citations)} citations in response")
+        
         return ChatResponse(
             response=content,
             model=model,
-            usage=usage
+            usage=usage,
+            citations=citations
         )
     
     except Exception as e:
@@ -381,7 +455,7 @@ async def generate_streaming_response(request: ChatRequest):
         스트리밍 응답 이터레이터
     """
     # 모델 설정
-    model = request.model
+    model = request.model or GPT_MODEL
     
     # 모델 ID 매핑 (필요한 경우)
     model_mapping = {
@@ -399,6 +473,9 @@ async def generate_streaming_response(request: ChatRequest):
     
     async def stream_generator():
         try:
+            # 지역 변수로 api_model을 복사
+            local_api_model = api_model
+            
             # 입력 메시지 형식 변환
             input_messages = []
             for msg in request.messages:
@@ -406,17 +483,49 @@ async def generate_streaming_response(request: ChatRequest):
                     "role": msg.role,
                     "content": msg.content
                 })
+            
+            # API 호출 준비
+            api_params = {
+                "model": local_api_model,
+                "input": input_messages,
+                "temperature": request.temperature,
+                "max_output_tokens": request.max_tokens,
+                "stream": True
+            }
+            
+            # 웹 검색 기능 지원 체크
+            if request.enable_web_search:
+                # 웹 검색을 지원하지 않는 모델의 경우 gpt-4.1로 변경
+                if local_api_model in ["gpt-4o-mini", "gpt-3.5-turbo"]:
+                    print(f"Warning: Model {local_api_model} does not support web search. Using gpt-4.1 instead.")
+                    local_api_model = "gpt-4.1"
+                    api_params["model"] = local_api_model
                 
+                # 웹 검색 도구 설정
+                api_params["tools"] = [{"type": "web_search_preview", 
+                                       "user_location": {
+                                           "type": "approximate",
+                                           "country": "KR",
+                                           "city": "Seoul",
+                                           "region": "Seoul",
+                                           "timezone": "Asia/Seoul"
+                                       },
+                                       "search_context_size": "medium"
+                                      }]
+                api_params["tool_choice"] = {"type": "web_search_preview"}
+                print(f"Debug - Web search enabled with model: {local_api_model}")
+                
+                # 특정 검색어가 있는 경우 마지막 메시지를 수정
+                if request.search_query:
+                    # 마지막 메시지를 검색어로 변경
+                    input_messages[-1]["content"] = request.search_query
+                    api_params["input"] = input_messages
+            
             # 새로운 응답 API 호출 (스트리밍)
-            stream = client.responses.create(
-                model=api_model,
-                input=input_messages,
-                temperature=request.temperature,
-                max_output_tokens=request.max_tokens,
-                stream=True
-            )
+            stream = client.responses.create(**api_params)
             
             collected_messages = []
+            citations = []
             
             # 청크 스트리밍
             for event in stream:
@@ -432,12 +541,49 @@ async def generate_streaming_response(request: ChatRequest):
                         # 비동기 작업 양보하기
                         await asyncio.sleep(0)
                 
+                # 인용 정보 처리
+                elif hasattr(event, 'type') and event.type == 'response.output_text.annotations':
+                    if hasattr(event, 'annotations'):
+                        for annotation in event.annotations:
+                            if annotation.type == "url_citation":
+                                citation = {
+                                    "url": annotation.url,
+                                    "title": annotation.title if hasattr(annotation, 'title') else "",
+                                    "start_index": annotation.start_index,
+                                    "end_index": annotation.end_index
+                                }
+                                citations.append(citation)
+                        
+                        # 인용 정보가 있으면 전송
+                        if citations:
+                            yield f"data: {json.dumps({'citations': citations, 'is_streaming': True, 'model': model})}\n\n"
+                            # 비동기 작업 양보하기
+                            await asyncio.sleep(0)
+                
+                # 웹 검색 호출 정보 처리
+                elif hasattr(event, 'type') and event.type == 'web_search_call':
+                    web_search_id = event.id if hasattr(event, 'id') else None
+                    if web_search_id:
+                        print(f"Debug - Web search call ID in streaming: {web_search_id}")
+                
                 # 완료 이벤트 처리
-                if hasattr(event, 'type') and event.type == 'response.completed':
+                elif hasattr(event, 'type') and event.type == 'response.completed':
                     break
             
             # 스트리밍 완료 신호
-            yield f"data: {json.dumps({'content': '', 'is_streaming': False, 'model': model, 'usage': {'completion_tokens': len(collected_messages)}})}\n\n"
+            completion_info = {
+                'content': '', 
+                'is_streaming': False, 
+                'model': model, 
+                'usage': {'completion_tokens': len(collected_messages)}
+            }
+            
+            # 인용 정보가 있으면 추가
+            if citations:
+                completion_info['citations'] = citations
+                print(f"Debug - Sending {len(citations)} citations in streaming completion")
+            
+            yield f"data: {json.dumps(completion_info)}\n\n"
             yield f"data: [DONE]\n\n"
             
         except Exception as e:
@@ -448,4 +594,132 @@ async def generate_streaming_response(request: ChatRequest):
             yield f"data: [DONE]\n\n"
     
     # 비동기 이터레이터 반환
-    return stream_generator() 
+    return stream_generator()
+
+async def perform_web_search(request: WebSearchRequest) -> WebSearchResponse:
+    """
+    OpenAI API의 웹 검색 도구를 사용하여 웹 검색을 수행합니다.
+    
+    Args:
+        request: WebSearchRequest 모델의 요청 데이터
+    
+    Returns:
+        WebSearchResponse: 웹 검색 결과
+    """
+    try:
+        # 모델 설정
+        model = request.model or "gpt-4.1"  # 웹 검색은 gpt-4.1에서 지원됨
+        
+        # 모델 ID 매핑 (필요한 경우)
+        model_mapping = {
+            "gpt-4.1": "gpt-4.1",
+            "gpt-4o": "gpt-4o",
+            "o4-mini": "gpt-4o-mini",
+            "o3": "gpt-3.5-turbo"
+        }
+        
+        # 모델 ID 변환
+        api_model = model_mapping.get(model, model)
+        
+        # web_search 도구가 지원되지 않는 모델인 경우 gpt-4.1로 변경
+        if api_model in ["gpt-4o-mini", "gpt-3.5-turbo"]:
+            print(f"Warning: Model {api_model} does not support web search. Using gpt-4.1 instead.")
+            api_model = "gpt-4.1"
+            model = "gpt-4.1"
+        
+        # OpenAI 클라이언트 초기화
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        
+        # 웹 검색 도구 설정
+        web_search_tool = {
+            "type": "web_search_preview",
+            "search_context_size": request.search_context_size
+        }
+        
+        # 사용자 위치 정보가 있으면 추가
+        if request.user_location:
+            web_search_tool["user_location"] = {
+                "type": "approximate",
+                **request.user_location
+            }
+        else:
+            # 기본 한국 위치 정보 추가
+            web_search_tool["user_location"] = {
+                "type": "approximate",
+                "country": "KR",
+                "city": "Seoul",
+                "region": "Seoul",
+                "timezone": "Asia/Seoul"
+            }
+        
+        print(f"Debug - Performing web search with query: {request.query}, model: {api_model}")
+        
+        # OpenAI API 호출
+        response = client.responses.create(
+            model=api_model,
+            tools=[web_search_tool],
+            input=request.query,
+            temperature=request.temperature,
+            max_output_tokens=request.max_tokens,
+            tool_choice={"type": "web_search_preview"}  # 웹 검색 도구를 강제로 사용하도록 설정
+        )
+        
+        # 응답 파싱
+        content = ""
+        citations = []
+        
+        # 웹 검색 호출 ID 확인 (디버깅용)
+        web_search_id = None
+        for output in response.output:
+            if output.type == "web_search_call":
+                web_search_id = output.id
+                print(f"Debug - Web search call ID: {web_search_id}")
+                break
+        
+        if hasattr(response, 'output_text'):
+            content = response.output_text
+        else:
+            # 각 출력 항목 처리
+            for output in response.output:
+                # 웹 검색 결과인 경우
+                if output.type == "message" and hasattr(output, 'content'):
+                    for item in output.content:
+                        if hasattr(item, 'text'):
+                            content += item.text
+                        
+                        # 인용 정보 추출
+                        if hasattr(item, 'annotations'):
+                            for annotation in item.annotations:
+                                if annotation.type == "url_citation":
+                                    citations.append({
+                                        "url": annotation.url,
+                                        "title": annotation.title if hasattr(annotation, 'title') else "",
+                                        "start_index": annotation.start_index,
+                                        "end_index": annotation.end_index
+                                    })
+        
+        # 사용량 정보
+        usage = {}
+        if hasattr(response, 'usage'):
+            usage = {
+                "prompt_tokens": response.usage.input_tokens,
+                "completion_tokens": response.usage.output_tokens,
+                "total_tokens": response.usage.total_tokens
+            }
+        
+        return WebSearchResponse(
+            response=content,
+            model=model,
+            usage=usage,
+            citations=citations
+        )
+    
+    except Exception as e:
+        # 에러 처리
+        error_message = f"Error performing web search: {str(e)}"
+        print(f"Web search error: {str(e)}")
+        return WebSearchResponse(
+            response=error_message,
+            model=model,
+            usage={"error": str(e)}
+        ) 

@@ -12,6 +12,8 @@ import {
   Loader2,
   X,
   PlusCircle,
+  Search,
+  Globe,
 } from "lucide-react";
 import { ChatMessage } from "@/components/chat-message";
 import { useMobile } from "@/hooks/use-mobile";
@@ -22,6 +24,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Switch } from "@/components/ui/switch";
 
 interface ChatAreaProps {
   onMenuClick: () => void;
@@ -41,6 +44,15 @@ interface Message {
   role: "user" | "system";
   content: string;
   imageUrl?: string; // 이미지 URL을 저장하기 위한 필드 추가
+  citations?: Citation[];
+}
+
+// 인용 정보 타입 정의
+interface Citation {
+  url: string;
+  title: string;
+  start_index: number;
+  end_index: number;
 }
 
 // 채팅 히스토리 타입 정의
@@ -123,6 +135,11 @@ export function ChatArea({
 
   // 채팅ID를 추적하는 상태 추가
   const [chatId, setChatId] = useState<number>(1);
+
+  // 웹 검색 관련 상태 추가
+  const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(false);
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [isSearchMode, setIsSearchMode] = useState<boolean>(false);
 
   // 전역 chatHistory 상태를 공유하기 위한 이벤트 발송 함수
   const broadcastChatHistory = useCallback(() => {
@@ -611,7 +628,7 @@ export function ChatArea({
     }
   };
 
-  // 메시지 전송 함수 수정 - 채팅 히스토리 추가
+  // 메시지 전송 함수 수정 - 웹 검색 지원 추가
   const sendMessage = async () => {
     // 입력 없고 이미지도 없으면 아무 것도 하지 않음
     if (!input.trim() && !(selectedFile || previewUrl)) {
@@ -668,6 +685,14 @@ export function ChatArea({
       );
     }
 
+    // 웹 검색 모드인 경우 검색 쿼리 설정
+    if (webSearchEnabled) {
+      if (isSearchMode) {
+        setSearchQuery(input);
+        userMessage.content = `웹 검색: ${input}`;
+      }
+    }
+
     // 메시지 목록에 사용자 메시지 추가
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
@@ -682,10 +707,23 @@ export function ChatArea({
 
     try {
       // API 호출 데이터 준비
-      const requestData = {
+      const requestData: any = {
         messages: [
           ...messages
             .filter((msg) => !msg.imageUrl) // 이미지 URL이 없는 메시지만 필터링
+            .filter((msg, index, arr) => {
+              // 이미지에 대한 언급이 있는 시스템 메시지 제거
+              if (
+                msg.role === "system" &&
+                (msg.content.includes("이미지를") ||
+                  msg.content.includes("PwC") ||
+                  msg.content.includes("로고") ||
+                  msg.content.toLowerCase().includes("image"))
+              ) {
+                return false;
+              }
+              return true;
+            })
             .map((msg) => ({ role: msg.role, content: msg.content })),
           { role: userMessage.role, content: userMessage.content },
         ],
@@ -694,6 +732,18 @@ export function ChatArea({
         max_tokens: 1000,
         stream: true,
       };
+
+      // 웹 검색이 활성화된 경우 관련 플래그 추가
+      if (webSearchEnabled) {
+        requestData.enable_web_search = true;
+
+        // 검색 모드인 경우 검색 쿼리 추가
+        if (isSearchMode && searchQuery) {
+          requestData.search_query = searchQuery;
+          // 검색 모드 비활성화
+          setIsSearchMode(false);
+        }
+      }
 
       // 빈 메시지로 시스템 응답 추가
       const initialMessage: Message = {
@@ -740,6 +790,7 @@ export function ChatArea({
         const decoder = new TextDecoder();
         let fullContent = "";
         let buffer = "";
+        let citations: Citation[] = [];
 
         while (true) {
           const { value, done } = await reader.read();
@@ -780,7 +831,39 @@ export function ChatArea({
                 );
               }
 
+              // 인용 정보가 있으면 추가
+              if (data.citations) {
+                citations = data.citations;
+                console.log("인용 정보 수신:", citations.length);
+
+                // 메시지 업데이트
+                setMessages((currentMessages) =>
+                  currentMessages.map((msg) =>
+                    msg.id === newMessageId
+                      ? {
+                          ...msg,
+                          content: fullContent,
+                          citations: citations,
+                        }
+                      : msg
+                  )
+                );
+              }
+
               if (data.is_streaming === false) {
+                // 스트리밍 종료 시 최종 메시지 업데이트
+                setMessages((currentMessages) =>
+                  currentMessages.map((msg) =>
+                    msg.id === newMessageId
+                      ? {
+                          ...msg,
+                          content: fullContent,
+                          citations:
+                            citations.length > 0 ? citations : undefined,
+                        }
+                      : msg
+                  )
+                );
                 setIsStreaming(false);
               }
             } catch (e) {
@@ -991,6 +1074,23 @@ export function ChatArea({
     }, 500);
   };
 
+  // 웹 검색 토글 핸들러
+  const toggleWebSearch = () => {
+    setWebSearchEnabled((prev) => !prev);
+  };
+
+  // 검색 모드 토글 핸들러
+  const toggleSearchMode = () => {
+    // 검색 모드 토글
+    setIsSearchMode((prev) => !prev);
+    // 검색 모드가 켜지면 입력창에 포커스
+    if (!isSearchMode && inputRef.current) {
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 100);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col bg-white dark:bg-background">
       {/* Header */}
@@ -1021,6 +1121,17 @@ export function ChatArea({
         </div>
 
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 mr-2">
+            <Globe size={16} className="text-gray-500 dark:text-gray-400" />
+            <Switch
+              checked={webSearchEnabled}
+              onCheckedChange={toggleWebSearch}
+              className="data-[state=checked]:bg-orange-500"
+            />
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              웹 검색
+            </span>
+          </div>
           <ThemeToggle />
           <Button
             variant="ghost"
@@ -1117,7 +1228,7 @@ export function ChatArea({
               size="icon"
               variant="outline"
               onClick={handleSelectClick}
-              disabled={isLoading}
+              disabled={isLoading || isSearchMode}
               className="border-gray-200 dark:border-secondary hover:bg-gray-100 dark:hover:bg-secondary/80"
               title="이미지 업로드"
             >
@@ -1129,13 +1240,39 @@ export function ChatArea({
             </div>
           </div>
 
+          {webSearchEnabled && (
+            <div className="group relative">
+              <Button
+                type="button"
+                size="icon"
+                variant={isSearchMode ? "default" : "outline"}
+                onClick={toggleSearchMode}
+                disabled={isLoading}
+                className={`${
+                  isSearchMode
+                    ? "bg-orange-500 text-white hover:bg-orange-600"
+                    : "border-gray-200 dark:border-secondary hover:bg-gray-100 dark:hover:bg-secondary/80"
+                }`}
+                title="웹 검색"
+              >
+                <Search size={18} />
+                <span className="sr-only">Web Search</span>
+              </Button>
+              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 p-2 bg-black text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                웹 검색 수행
+              </div>
+            </div>
+          )}
+
           <Input
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
-              selectedFile
+              isSearchMode
+                ? "웹 검색어를 입력하세요..."
+                : selectedFile
                 ? "이미지에 대한 질문을 입력하세요..."
                 : "Type your message..."
             }
@@ -1173,6 +1310,11 @@ export function ChatArea({
           <p className="text-xs text-center text-gray-500 dark:text-muted-foreground mt-2">
             선택된 이미지: {selectedFile.name} (
             {(selectedFile.size / (1024 * 1024)).toFixed(2)}MB)
+          </p>
+        )}
+        {isSearchMode && (
+          <p className="text-xs text-center text-orange-500 mt-2">
+            웹 검색 모드: 검색어를 입력하고 검색 결과를 채팅에서 받아보세요
           </p>
         )}
         <p className="text-xs text-center text-gray-500 dark:text-muted-foreground mt-2">
