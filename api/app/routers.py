@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File, Form
 from .models import ChatRequest, ChatResponse, ChatMessage, ImageAnalysisRequest, ImageAnalysisResponse
-from .services import generate_chat_response, generate_streaming_response, analyze_image
+from .services import generate_chat_response, generate_streaming_response, analyze_image, analyze_image_streaming
 from fastapi.responses import StreamingResponse
 from typing import List, Optional
 import base64
@@ -124,7 +124,8 @@ async def analyze_image_from_url(request: ImageAnalysisRequest):
     try:
         # 스트리밍 요청인 경우 스트리밍 응답을 반환
         if request.stream:
-            return await analyze_image(request)
+            # 비동기 스트리밍 함수 직접 호출
+            return await analyze_image_streaming(request)
         
         # 일반 요청인 경우 표준 응답을 반환
         response = await analyze_image(request)
@@ -390,9 +391,13 @@ async def analyze_uploaded_image(
         )
         
         # 이미지 분석 (스트리밍 또는 일반 요청)
-        response = await analyze_image(request)
-            
-        return response
+        if stream:
+            # 스트리밍 응답 처리
+            return await analyze_image_streaming(request)
+        else:
+            # 일반 응답 처리
+            response = await analyze_image(request)
+            return response
         
     except HTTPException as e:
         # HTTP 예외는 그대로 전달
@@ -407,12 +412,11 @@ async def get_available_models():
     """
     사용 가능한 모델 목록을 반환합니다.
     """
-    # 현재는 하드코딩된 목록을 반환
-    # 필요한 경우 OpenAI API를 사용하여 동적으로 가져올 수 있음
+    # 요청된 모델 목록 반환
     models = [
         {"id": "gpt-4.1", "name": "GPT-4.1"},
         {"id": "gpt-4o", "name": "GPT-4o"},
-        {"id": "gpt-4-1106-preview", "name": "GPT-4 Turbo"},
-        {"id": "gpt-4", "name": "GPT-4"},
+        {"id": "o4-mini", "name": "O4-mini"},
+        {"id": "o3", "name": "O3"}
     ]
-    return {"models": models} 
+    return {"models": models}

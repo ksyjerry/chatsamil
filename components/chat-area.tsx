@@ -43,6 +43,14 @@ interface Message {
   imageUrl?: string; // 이미지 URL을 저장하기 위한 필드 추가
 }
 
+// 채팅 히스토리 타입 정의
+interface ChatHistory {
+  id: number;
+  title: string;
+  lastMessage: string;
+  timestamp: Date;
+}
+
 // API URL 설정
 const API_URL = "http://localhost:8000/api";
 
@@ -86,6 +94,15 @@ export function ChatArea({
   const [streamingMessage, setStreamingMessage] = useState<string>("");
   const [isStreaming, setIsStreaming] = useState(true);
 
+  // 채팅 제목 관련 상태 추가
+  const [chatTitle, setChatTitle] = useState<string>("Current Chat");
+  const [isEditingTitle, setIsEditingTitle] = useState<boolean>(false);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
+  // 채팅 히스토리 상태 추가
+  const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
+  const [currentChatId, setCurrentChatId] = useState<number>(1);
+
   // 이미지 업로드 관련 상태 추가
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -107,6 +124,20 @@ export function ChatArea({
   // 채팅ID를 추적하는 상태 추가
   const [chatId, setChatId] = useState<number>(1);
 
+  // 전역 chatHistory 상태를 공유하기 위한 이벤트 발송 함수
+  const broadcastChatHistory = useCallback(() => {
+    // 채팅 히스토리가 업데이트됨을 알리는 커스텀 이벤트 생성
+    const event = new CustomEvent("chatHistoryUpdated", {
+      detail: { chatHistory },
+    });
+    window.dispatchEvent(event);
+  }, [chatHistory]);
+
+  // 채팅 히스토리 업데이트 시 이벤트 발송
+  useEffect(() => {
+    broadcastChatHistory();
+  }, [chatHistory, broadcastChatHistory]);
+
   // 전역 newChat 이벤트 리스너 추가
   useEffect(() => {
     // 이벤트 리스너 함수 생성
@@ -121,6 +152,29 @@ export function ChatArea({
     // 컴포넌트 언마운트 시 이벤트 리스너 제거
     return () => {
       window.removeEventListener("newChat", handleNewChatEvent);
+    };
+  }, []); // 빈 의존성 배열로 컴포넌트 마운트/언마운트 시에만 실행
+
+  // 채팅 전환 이벤트 리스너 추가
+  useEffect(() => {
+    // 이벤트 리스너 함수 생성
+    const handleSwitchChatEvent = (event: CustomEvent) => {
+      console.log("Switch Chat 이벤트 감지됨!", event.detail.chat);
+      switchToChat(event.detail.chat);
+    };
+
+    // 이벤트 리스너 등록
+    window.addEventListener(
+      "switchChat",
+      handleSwitchChatEvent as EventListener
+    );
+
+    // 컴포넌트 언마운트 시 이벤트 리스너 제거
+    return () => {
+      window.removeEventListener(
+        "switchChat",
+        handleSwitchChatEvent as EventListener
+      );
     };
   }, []); // 빈 의존성 배열로 컴포넌트 마운트/언마운트 시에만 실행
 
@@ -213,41 +267,16 @@ export function ChatArea({
     }
   }, [isStreaming]);
 
-  // 사용 가능한 모델 목록
-  const [models, setModels] = useState<Model[]>([
-    { id: "gpt-4.1", name: "GPT4.1" },
-    { id: "gpt-4-1106-preview", name: "GPT-4 Turbo" },
-    { id: "gpt-4", name: "GPT-4" },
-  ]);
+  // 사용 가능한 모델 목록 - 프론트엔드에 고정
+  const models: Model[] = [
+    { id: "gpt-4.1", name: "GPT-4.1" },
+    { id: "gpt-4o", name: "GPT-4o" },
+    { id: "o4-mini", name: "O4-mini" },
+    { id: "o3", name: "O3" },
+  ];
 
   // 선택된 모델 상태
-  const [selectedModel, setSelectedModel] = useState<Model>({
-    id: "gpt-4.1",
-    name: "GPT4.1",
-  });
-
-  // 모델 목록 가져오기
-  useEffect(() => {
-    const fetchModels = async () => {
-      try {
-        const response = await fetch(`${API_URL}/models`);
-        if (!response.ok) {
-          throw new Error("모델 목록을 가져오는데 실패했습니다.");
-        }
-        const data = await response.json();
-        setModels(data.models);
-        // 기본 모델 설정
-        if (data.models.length > 0) {
-          setSelectedModel(data.models[0]);
-        }
-      } catch (err) {
-        console.error("모델 목록 에러:", err);
-        // 기본 모델 목록 유지
-      }
-    };
-
-    fetchModels();
-  }, []);
+  const [selectedModel, setSelectedModel] = useState<Model>(models[0]);
 
   // 이미지가 화면에 표시되고 있는지 확인하는 함수
   const isImageVisible = (): boolean => {
@@ -462,83 +491,105 @@ export function ChatArea({
       console.log(`Debug - Sending request with model: ${selectedModel.id}`);
 
       // API 요청
-      const response = await fetch(`${API_URL}/upload-image`, {
-        method: "POST",
-        body: formData,
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        setError("API 요청 시간이 초과되었습니다. 다른 모델을 선택해보세요.");
+        setIsLoading(false);
+        setIsStreaming(false);
+      }, 30000); // 30초 타임아웃
 
-      if (!response.ok) {
-        let errorMessage = "이미지 분석 중 오류가 발생했습니다.";
-        try {
-          const errorData = await response.json();
-          console.error("API error response:", errorData);
-          errorMessage =
-            errorData.detail || errorData.error?.message || errorMessage;
-        } catch (e) {
-          const errorText = await response.text();
-          console.error("API error text:", errorText);
-          errorMessage = errorText || errorMessage;
-        }
-        throw new Error(errorMessage);
-      }
+      try {
+        const response = await fetch(`${API_URL}/upload-image`, {
+          method: "POST",
+          body: formData,
+          signal: controller.signal,
+        });
 
-      // body가 없으면 에러
-      if (!response.body) {
-        throw new Error("응답 본문이 없습니다.");
-      }
+        clearTimeout(timeoutId); // 타임아웃 해제
 
-      // 스트리밍 응답 처리
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let fullContent = "";
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        // 텍스트 디코딩
-        const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk;
-
-        // 이벤트 스트림 형식 처리 (data: {...}\n\n)
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.trim() === "") continue;
-          if (line.includes("[DONE]")) {
-            setIsStreaming(false);
-            continue;
-          }
-
+        if (!response.ok) {
+          let errorMessage = "이미지 분석 중 오류가 발생했습니다.";
           try {
-            // "data: " 접두사 제거
-            const jsonStr = line.replace(/^data: /, "").trim();
-            if (!jsonStr) continue;
-
-            const data = JSON.parse(jsonStr);
-
-            if (data.content) {
-              fullContent += data.content;
-
-              // 실시간으로 메시지 업데이트
-              setMessages((currentMessages) =>
-                currentMessages.map((msg) =>
-                  msg.id === newMessageId
-                    ? { ...msg, content: fullContent }
-                    : msg
-                )
-              );
-            }
-
-            if (data.is_streaming === false) {
-              setIsStreaming(false);
-            }
+            const errorData = await response.json();
+            console.error("API error response:", errorData);
+            errorMessage =
+              errorData.detail || errorData.error?.message || errorMessage;
           } catch (e) {
-            console.error("JSON 파싱 오류:", e, line);
+            const errorText = await response.text();
+            console.error("API error text:", errorText);
+            errorMessage = errorText || errorMessage;
+          }
+          throw new Error(errorMessage);
+        }
+
+        // body가 없으면 에러
+        if (!response.body) {
+          throw new Error("응답 본문이 없습니다.");
+        }
+
+        // 스트리밍 응답 처리
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullContent = "";
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          // 텍스트 디코딩
+          const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk;
+
+          // 이벤트 스트림 형식 처리 (data: {...}\n\n)
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (line.trim() === "") continue;
+            if (line.includes("[DONE]")) {
+              setIsStreaming(false);
+              continue;
+            }
+
+            try {
+              // "data: " 접두사 제거
+              const jsonStr = line.replace(/^data: /, "").trim();
+              if (!jsonStr) continue;
+
+              const data = JSON.parse(jsonStr);
+
+              if (data.content) {
+                fullContent += data.content;
+
+                // 실시간으로 메시지 업데이트
+                setMessages((currentMessages) =>
+                  currentMessages.map((msg) =>
+                    msg.id === newMessageId
+                      ? { ...msg, content: fullContent }
+                      : msg
+                  )
+                );
+              }
+
+              if (data.is_streaming === false) {
+                setIsStreaming(false);
+              }
+            } catch (e) {
+              console.error("JSON 파싱 오류:", e, line);
+            }
           }
         }
+      } catch (error) {
+        // AbortController에 의한 취소 확인
+        if (error instanceof Error && error.name === "AbortError") {
+          console.error("Request aborted due to timeout");
+          throw new Error(
+            "요청 시간이 초과되었습니다. 다른 모델을 선택해보세요."
+          );
+        }
+        throw error; // 다른 오류는 상위 catch 블록으로 전달
       }
 
       // 요청이 완료되면 상태 초기화
@@ -560,7 +611,7 @@ export function ChatArea({
     }
   };
 
-  // 메시지 전송 함수 수정
+  // 메시지 전송 함수 수정 - 채팅 히스토리 추가
   const sendMessage = async () => {
     // 입력 없고 이미지도 없으면 아무 것도 하지 않음
     if (!input.trim() && !(selectedFile || previewUrl)) {
@@ -586,6 +637,36 @@ export function ChatArea({
       role: "user",
       content: input,
     };
+
+    // 첫 메시지인 경우 채팅 히스토리에 추가
+    if (messages.length <= 1) {
+      // 초기 인사말만 있는 경우를 포함
+      const newChat: ChatHistory = {
+        id: currentChatId,
+        title: chatTitle,
+        lastMessage: input.length > 30 ? input.substring(0, 30) + "..." : input,
+        timestamp: new Date(),
+      };
+
+      setChatHistory((prev) => [
+        newChat,
+        ...prev.filter((chat) => chat.id !== currentChatId),
+      ]);
+    } else {
+      // 기존 채팅 업데이트
+      setChatHistory((prev) =>
+        prev.map((chat) =>
+          chat.id === currentChatId
+            ? {
+                ...chat,
+                lastMessage:
+                  input.length > 30 ? input.substring(0, 30) + "..." : input,
+                timestamp: new Date(),
+              }
+            : chat
+        )
+      );
+    }
 
     // 메시지 목록에 사용자 메시지 추가
     setMessages((prev) => [...prev, userMessage]);
@@ -624,74 +705,98 @@ export function ChatArea({
       setIsStreaming(true);
 
       // POST 요청으로 스트리밍 데이터 가져오기
-      const response = await fetch(`${API_URL}/chat`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestData),
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        setError("API 요청 시간이 초과되었습니다. 다른 모델을 선택해보세요.");
+        setIsLoading(false);
+        setIsStreaming(false);
+      }, 30000); // 30초 타임아웃
 
-      if (!response.ok) {
-        throw new Error("API 요청에 실패했습니다.");
-      }
+      try {
+        const response = await fetch(`${API_URL}/chat`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestData),
+          signal: controller.signal,
+        });
 
-      if (!response.body) {
-        throw new Error("응답 본문이 없습니다.");
-      }
+        clearTimeout(timeoutId); // 타임아웃 해제
 
-      // 응답 스트림 처리
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let fullContent = "";
-      let buffer = "";
+        if (!response.ok) {
+          throw new Error(
+            `API 요청 실패: ${response.status} ${response.statusText}`
+          );
+        }
 
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
+        if (!response.body) {
+          throw new Error("응답 본문이 없습니다.");
+        }
 
-        // 텍스트 디코딩
-        const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk;
+        // 응답 스트림 처리
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullContent = "";
+        let buffer = "";
 
-        // 이벤트 스트림 형식 처리 (data: {...}\n\n)
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() || "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
 
-        for (const line of lines) {
-          if (line.trim() === "") continue;
-          if (line.includes("[DONE]")) {
-            setIsStreaming(false);
-            continue;
-          }
+          // 텍스트 디코딩
+          const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk;
 
-          try {
-            // "data: " 접두사 제거
-            const jsonStr = line.replace(/^data: /, "").trim();
-            if (!jsonStr) continue;
+          // 이벤트 스트림 형식 처리 (data: {...}\n\n)
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
 
-            const data = JSON.parse(jsonStr);
-
-            if (data.content) {
-              fullContent += data.content;
-
-              // 실시간으로 메시지 업데이트
-              setMessages((currentMessages) =>
-                currentMessages.map((msg) =>
-                  msg.id === newMessageId
-                    ? { ...msg, content: fullContent }
-                    : msg
-                )
-              );
-            }
-
-            if (data.is_streaming === false) {
+          for (const line of lines) {
+            if (line.trim() === "") continue;
+            if (line.includes("[DONE]")) {
               setIsStreaming(false);
+              continue;
             }
-          } catch (e) {
-            console.error("JSON 파싱 오류:", e, line);
+
+            try {
+              // "data: " 접두사 제거
+              const jsonStr = line.replace(/^data: /, "").trim();
+              if (!jsonStr) continue;
+
+              const data = JSON.parse(jsonStr);
+
+              if (data.content) {
+                fullContent += data.content;
+
+                // 실시간으로 메시지 업데이트
+                setMessages((currentMessages) =>
+                  currentMessages.map((msg) =>
+                    msg.id === newMessageId
+                      ? { ...msg, content: fullContent }
+                      : msg
+                  )
+                );
+              }
+
+              if (data.is_streaming === false) {
+                setIsStreaming(false);
+              }
+            } catch (e) {
+              console.error("JSON 파싱 오류:", e, line);
+            }
           }
         }
+      } catch (error) {
+        // AbortController에 의한 취소 확인
+        if (error instanceof Error && error.name === "AbortError") {
+          console.error("Request aborted due to timeout");
+          throw new Error(
+            "요청 시간이 초과되었습니다. 다른 모델을 선택해보세요."
+          );
+        }
+        throw error; // 다른 오류는 상위 catch 블록으로 전달
       }
     } catch (err) {
       console.error("API 에러:", err);
@@ -726,7 +831,105 @@ export function ChatArea({
     }
   };
 
-  // 채팅 초기화 함수
+  // 모델 선택 핸들러
+  const handleModelSelect = (model: Model) => {
+    try {
+      // 선택된 모델 업데이트
+      setSelectedModel(model);
+      // 에러 상태 초기화
+      setError(null);
+
+      // 디버깅용 로그
+      console.log(`모델 변경됨: ${model.name} (${model.id})`);
+
+      // AI가 응답할 준비가 되었음을 알려주는 메시지 추가
+      setMessages((prev) => {
+        // 이전 메시지가 있고 마지막 메시지가 사용자 메시지인 경우에만 추가
+        if (prev.length > 0 && prev[prev.length - 1].role === "user") {
+          return [
+            ...prev,
+            {
+              id: prev.length + 1,
+              role: "system",
+              content: `모델이 ${model.name}(으)로 변경되었습니다.`,
+            },
+          ];
+        }
+        return prev;
+      });
+    } catch (err) {
+      console.error("모델 선택 오류:", err);
+    }
+  };
+
+  // 드롭다운 메뉴 컴포넌트
+  const ModelDropdown = () => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          className="flex items-center gap-2 h-9 border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600"
+        >
+          <span className="font-medium">모델: </span>
+          <span className="text-gray-900 dark:text-white">
+            {selectedModel.name}
+          </span>
+          <ChevronDown size={16} />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56" sideOffset={5}>
+        <div className="py-1">
+          {models.map((model) => (
+            <DropdownMenuItem
+              key={model.id}
+              onClick={() => handleModelSelect(model)}
+              className={`mb-1 ${
+                selectedModel.id === model.id
+                  ? "bg-gray-100 dark:bg-gray-800 font-medium"
+                  : ""
+              }`}
+            >
+              {model.name}
+            </DropdownMenuItem>
+          ))}
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
+  // 새로운 함수: 채팅 제목 편집 시작
+  const startTitleEdit = () => {
+    setIsEditingTitle(true);
+    // 다음 렌더링 이후에 포커스 설정
+    setTimeout(() => {
+      if (titleInputRef.current) {
+        titleInputRef.current.focus();
+        titleInputRef.current.select();
+      }
+    }, 10);
+  };
+
+  // 새로운 함수: 채팅 제목 편집 완료
+  const finishTitleEdit = () => {
+    // 빈 제목이면 기본값으로 설정
+    if (!chatTitle.trim()) {
+      setChatTitle("새 대화");
+    }
+    setIsEditingTitle(false);
+  };
+
+  // 새로운 함수: 채팅 제목 변경 시 키보드 이벤트 처리
+  const handleTitleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finishTitleEdit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setIsEditingTitle(false);
+    }
+  };
+
+  // 채팅 초기화 함수 수정 - 새 채팅 생성
   const startNewChat = () => {
     // 모든 상태 초기화
     setSelectedFile(null);
@@ -737,6 +940,11 @@ export function ChatArea({
     setIsLoading(false);
     setIsStreaming(false);
     setMessages([]);
+    setChatTitle("Current Chat");
+
+    // 새 채팅 ID 생성
+    const newChatId = Date.now();
+    setCurrentChatId(newChatId);
 
     // chatId를 증가시켜 새로운 useEffect 트리거
     setChatId((prev) => prev + 1);
@@ -751,50 +959,65 @@ export function ChatArea({
     }, 500);
   };
 
+  // 채팅 전환 함수 추가
+  const switchToChat = (chat: ChatHistory) => {
+    // 현재 채팅 저장 로직 추가 필요 (필요한 경우)
+
+    // 선택한 채팅으로 상태 업데이트
+    setCurrentChatId(chat.id);
+    setChatTitle(chat.title);
+
+    // 선택한 채팅의 메시지 로드 로직 필요 (현재는 빈 구현)
+    setMessages([
+      {
+        id: 1,
+        role: "system",
+        content: "이전 대화를 불러왔습니다. 계속 대화를 이어나가세요.",
+      },
+    ]);
+
+    // 상태 초기화
+    setSelectedFile(null);
+    setPreviewUrl(null);
+    setError(null);
+    setStreamingMessage("");
+    setInput("");
+    setIsLoading(false);
+    setIsStreaming(false);
+
+    // 포커스 설정
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 500);
+  };
+
   return (
     <div className="h-full flex flex-col bg-white dark:bg-background">
       {/* Header */}
       <header className="border-b border-gray-200 dark:border-border p-3 flex items-center justify-between bg-white dark:bg-background">
         <div className="flex items-center">
-          {/* 모델 선택 드롭다운 */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                className="flex items-center gap-2 h-9 border-orange-200 hover:border-orange-300 dark:border-orange-800 dark:hover:border-orange-700"
-              >
-                <span>{selectedModel.name}</span>
-                <ChevronDown size={16} />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              {models.map((model) => (
-                <DropdownMenuItem
-                  key={model.id}
-                  onClick={() => setSelectedModel(model)}
-                  className={
-                    selectedModel.id === model.id
-                      ? "bg-orange-100 dark:bg-orange-900/50 font-medium text-orange-700 dark:text-orange-300"
-                      : ""
-                  }
-                >
-                  {model.name}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <ModelDropdown />
 
-          <h2 className="font-semibold ml-3">Current Chat</h2>
-
-          {/* New Chat 버튼 추가 */}
-          <Button
-            onClick={startNewChat}
-            variant="ghost"
-            className="ml-4 flex items-center gap-2 h-8 text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white"
-          >
-            <PlusCircle size={16} />
-            <span>New Chat</span>
-          </Button>
+          {isEditingTitle ? (
+            <input
+              ref={titleInputRef}
+              type="text"
+              value={chatTitle}
+              onChange={(e) => setChatTitle(e.target.value)}
+              onKeyDown={handleTitleKeyDown}
+              onBlur={finishTitleEdit}
+              className="ml-3 px-2 py-1 text-base font-medium bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500 dark:focus:ring-orange-600"
+              maxLength={50}
+            />
+          ) : (
+            <h2
+              className="font-semibold ml-3 cursor-pointer hover:text-orange-500 dark:hover:text-orange-400 transition-colors"
+              onClick={startTitleEdit}
+              title="클릭하여 채팅 제목 변경"
+            >
+              {chatTitle}
+            </h2>
+          )}
         </div>
 
         <div className="flex items-center gap-2">

@@ -23,6 +23,17 @@ async def generate_chat_response(request: ChatRequest) -> ChatResponse:
         # 모델 설정
         model = request.model or GPT_MODEL
         
+        # 모델 ID 매핑 (필요한 경우)
+        model_mapping = {
+            "gpt-4.1": "gpt-4.1",
+            "gpt-4o": "gpt-4o",
+            "o4-mini": "gpt-4o-mini",
+            "o3": "gpt-3.5-turbo"
+        }
+        
+        # 모델 ID 변환
+        api_model = model_mapping.get(model, model)
+        
         # OpenAI API 호출
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
         
@@ -36,7 +47,7 @@ async def generate_chat_response(request: ChatRequest) -> ChatResponse:
         
         # 새로운 응답 API 호출
         response = client.responses.create(
-            model=model,
+            model=api_model,
             input=input_messages,
             temperature=request.temperature,
             max_output_tokens=request.max_tokens
@@ -91,12 +102,28 @@ async def analyze_image(request: ImageAnalysisRequest) -> ImageAnalysisResponse:
     """
     # 스트리밍 요청이면 스트리밍 처리
     if hasattr(request, 'stream') and request.stream:
-        # 비동기 이터레이터를 생성하여 스트리밍 응답 처리
-        return await analyze_image_streaming(request)
+        # 별도의 함수를 직접 호출하지 않고, 라우터에서 처리하도록 표시만 함
+        # 스트리밍 요청임을 나타내는 값만 반환
+        return ImageAnalysisResponse(
+            response="Streaming request - handled separately",
+            model=request.model or "gpt-4.1",
+            is_streaming=True
+        )
         
     try:
         # 모델 설정 (기본값: GPT-4.1)
         model = request.model or "gpt-4.1"
+        
+        # 모델 ID 매핑 (필요한 경우)
+        model_mapping = {
+            "gpt-4.1": "gpt-4.1",
+            "gpt-4o": "gpt-4o",
+            "o4-mini": "gpt-4o-mini",
+            "o3": "gpt-3.5-turbo"
+        }
+        
+        # 모델 ID 변환
+        api_model = model_mapping.get(model, model)
         
         # OpenAI 클라이언트 초기화
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
@@ -104,7 +131,7 @@ async def analyze_image(request: ImageAnalysisRequest) -> ImageAnalysisResponse:
         # 이미지 URL 확인 및 처리
         image_url = request.image_url
         
-        print(f"Debug - Model: {model}")
+        print(f"Debug - Model: {model} -> API Model: {api_model}")
         
         # 이미지 URL이 유효한지 확인
         if not image_url:
@@ -165,61 +192,44 @@ async def analyze_image(request: ImageAnalysisRequest) -> ImageAnalysisResponse:
             ]
         })
         
-        # OpenAI API 호출
-        print(f"Debug - Calling OpenAI API with model: {model}")
-        try:
-            response = client.responses.create(
-                model=model,
-                input=input_content,
-                max_output_tokens=request.max_tokens
-            )
-            
-            # 응답 파싱
-            if hasattr(response, 'output_text'):
-                content = response.output_text
-            else:
-                # 출력 텍스트를 찾을 수 없는 경우
-                content = "응답을 찾을 수 없습니다."
-                for output in response.output:
-                    if hasattr(output, 'content'):
-                        for item in output.content:
-                            if hasattr(item, 'text'):
-                                content = item.text
-                                break
-            
-            # 사용량 정보
-            usage = {}
-            if hasattr(response, 'usage'):
-                usage = {
-                    "prompt_tokens": response.usage.input_tokens,
-                    "completion_tokens": response.usage.output_tokens,
-                    "total_tokens": response.usage.total_tokens
-                }
-            
-            print(f"Debug - API call successful, received content of length: {len(content)}")
-            
-            return ImageAnalysisResponse(
-                response=content,
-                model=model,
-                usage=usage
-            )
-        except Exception as e:
-            error_message = str(e)
-            print(f"OpenAI API Error: {error_message}")
-            
-            # 이미지 형식 오류 감지
-            if "invalid_image_format" in error_message:
-                print("Debug - Invalid image format detected in API response")
-                error_detail = "이미지 형식이 지원되지 않습니다. JPEG, PNG, GIF, WEBP 형식의 이미지를 사용해주세요."
-            else:
-                error_detail = f"OpenAI API 오류: {error_message}"
-            
-            return ImageAnalysisResponse(
-                response=f"이미지 분석 중 오류가 발생했습니다: {error_detail}",
-                model=model,
-                usage={"error": error_message}
-            )
-    
+        # API 호출 준비
+        print(f"Debug - Calling OpenAI API with model: {model} -> {api_model}")
+        
+        # OpenAI API 호출 (비스트리밍 모드)
+        response = client.responses.create(
+            model=api_model,
+            input=input_content,
+            max_output_tokens=request.max_tokens
+        )
+        
+        # 응답 파싱
+        content = ""
+        if hasattr(response, 'output_text'):
+            content = response.output_text
+        else:
+            # 출력 텍스트를 찾을 수 없는 경우
+            for output in response.output:
+                if hasattr(output, 'content'):
+                    for item in output.content:
+                        if hasattr(item, 'text'):
+                            content += item.text
+        
+        # 사용량 정보
+        usage = {}
+        if hasattr(response, 'usage'):
+            usage = {
+                "prompt_tokens": response.usage.input_tokens,
+                "completion_tokens": response.usage.output_tokens,
+                "total_tokens": response.usage.total_tokens
+            }
+        
+        # 최종 응답 반환
+        return ImageAnalysisResponse(
+            response=content,
+            model=model,
+            usage=usage
+        )
+        
     except Exception as e:
         # 상세 에러 메시지 로깅
         error_message = f"Error analyzing image: {str(e)}"
@@ -234,22 +244,34 @@ async def analyze_image(request: ImageAnalysisRequest) -> ImageAnalysisResponse:
 
 async def analyze_image_streaming(request: ImageAnalysisRequest):
     """
-    OpenAI API를 사용하여 이미지를 분석하고 스트리밍 응답을 반환합니다.
+    이미지를 분석하고 스트리밍 응답을 생성합니다.
     
     Args:
-        request: ImageAnalysisRequest 모델의 요청 데이터
-    
+        request: ImageAnalysisRequest 객체
+        
     Returns:
-        StreamingResponse: 스트리밍 응답
+        StreamingResponse: 스트리밍 응답 객체
     """
+    # 모델 설정 (기본값: GPT-4.1)
     model = request.model or "gpt-4.1"
+    
+    # 모델 ID 매핑 (필요한 경우)
+    model_mapping = {
+        "gpt-4.1": "gpt-4.1",
+        "gpt-4o": "gpt-4o",
+        "o4-mini": "gpt-4o-mini",
+        "o3": "gpt-3.5-turbo"
+    }
+    
+    # 모델 ID 변환
+    api_model = model_mapping.get(model, model)
+    
+    # OpenAI 클라이언트 초기화
+    client = openai.OpenAI(api_key=OPENAI_API_KEY)
     
     # 비동기 이터레이터를 정의합니다
     async def stream_generator():
         try:
-            # OpenAI API 스트리밍 호출
-            client = openai.OpenAI(api_key=OPENAI_API_KEY)
-            
             # 이미지 URL 확인 및 처리
             image_url = request.image_url
             
@@ -295,14 +317,14 @@ async def analyze_image_streaming(request: ImageAnalysisRequest):
                 ]
             })
             
-            print(f"Debug - Calling OpenAI API with model: {model} (streaming)")
+            print(f"Debug - Calling streaming OpenAI API with model: {model} -> {api_model}")
             
-            # 스트리밍 호출
+            # OpenAI API 호출
             stream = client.responses.create(
-                model=model,
+                model=api_model,
                 input=input_content,
-                max_output_tokens=request.max_tokens,
-                stream=True
+                stream=True,
+                max_output_tokens=request.max_tokens
             )
             
             collected_messages = []
@@ -350,22 +372,33 @@ async def analyze_image_streaming(request: ImageAnalysisRequest):
 
 async def generate_streaming_response(request: ChatRequest):
     """
-    OpenAI API를 사용하여 스트리밍 채팅 응답을 생성합니다.
+    OpenAI API를 사용하여 스트리밍 응답을 생성하는 비동기 함수.
     
     Args:
-        request: ChatRequest 모델의 요청 데이터
-    
+        request: ChatRequest 객체
+        
     Returns:
-        StreamingResponse: 스트리밍 응답
+        스트리밍 응답 이터레이터
     """
-    model = request.model or GPT_MODEL
+    # 모델 설정
+    model = request.model
     
-    # 비동기 이터레이터를 정의합니다
+    # 모델 ID 매핑 (필요한 경우)
+    model_mapping = {
+        "gpt-4.1": "gpt-4.1",
+        "gpt-4o": "gpt-4o",
+        "o4-mini": "gpt-4o-mini",
+        "o3": "gpt-3.5-turbo"
+    }
+    
+    # 모델 ID 변환
+    api_model = model_mapping.get(model, model)
+    
+    # OpenAI 클라이언트 초기화
+    client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    
     async def stream_generator():
         try:
-            # OpenAI API 스트리밍 호출
-            client = openai.OpenAI(api_key=OPENAI_API_KEY)
-            
             # 입력 메시지 형식 변환
             input_messages = []
             for msg in request.messages:
@@ -376,7 +409,7 @@ async def generate_streaming_response(request: ChatRequest):
                 
             # 새로운 응답 API 호출 (스트리밍)
             stream = client.responses.create(
-                model=model,
+                model=api_model,
                 input=input_messages,
                 temperature=request.temperature,
                 max_output_tokens=request.max_tokens,

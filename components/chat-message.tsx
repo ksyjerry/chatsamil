@@ -110,6 +110,52 @@ export function ChatMessage({
     },
     [copiedMap, copyToClipboard, extractCodeText]
   );
+  
+  // 표 커스텀 컴포넌트
+  const TableComponent = useCallback(({ children, ...props }: any) => {
+    return (
+      <div className="overflow-x-auto my-4">
+        <table className="border-collapse w-full" {...props}>
+          {children}
+        </table>
+      </div>
+    );
+  }, []);
+
+  const TableHead = useCallback(({ children, ...props }: any) => {
+    return (
+      <thead className="bg-gray-100 dark:bg-gray-800" {...props}>
+        {children}
+      </thead>
+    );
+  }, []);
+
+  const TableRow = useCallback(({ children, ...props }: any) => {
+    return (
+      <tr 
+        className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900 transition-colors" 
+        {...props}
+      >
+        {children}
+      </tr>
+    );
+  }, []);
+
+  const TableCell = useCallback(({ children, ...props }: any) => {
+    return (
+      <td className="py-2 px-4 border-x border-gray-200 dark:border-gray-700" {...props}>
+        {children}
+      </td>
+    );
+  }, []);
+
+  const TableHeader = useCallback(({ children, ...props }: any) => {
+    return (
+      <th className="py-3 px-4 text-left font-medium border-x border-gray-200 dark:border-gray-700" {...props}>
+        {children}
+      </th>
+    );
+  }, []);
 
   return (
     <div className={`flex gap-4 ${isUser ? "flex-row-reverse" : ""}`}>
@@ -154,6 +200,9 @@ export function ChatMessage({
             prose-li:my-0.5
             prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800 prose-pre:border prose-pre:border-gray-200 dark:prose-pre:border-gray-700
             prose-pre:shadow-sm
+            prose-table:border-collapse prose-table:w-full
+            prose-th:bg-gray-100 dark:prose-th:bg-gray-800 prose-th:p-2 prose-th:text-left
+            prose-td:border prose-td:p-2 prose-td:border-gray-200 dark:prose-td:border-gray-700
             max-w-none ${isUser ? "text-right" : "text-left"}`}
           >
             <ReactMarkdown
@@ -161,6 +210,11 @@ export function ChatMessage({
               rehypePlugins={[rehypeRaw, rehypeHighlight]}
               components={{
                 pre: PreBlock,
+                table: TableComponent,
+                thead: TableHead,
+                tr: TableRow,
+                td: TableCell,
+                th: TableHeader
               }}
             >
               {message.content}

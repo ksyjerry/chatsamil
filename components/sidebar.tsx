@@ -15,6 +15,14 @@ import { useTheme } from "next-themes";
 import Image from "next/image";
 import { useEffect, useState } from "react";
 
+// 채팅 히스토리 타입 정의
+interface ChatHistory {
+  id: number;
+  title: string;
+  lastMessage: string;
+  timestamp: Date;
+}
+
 interface SidebarProps {
   onClose: () => void;
   collapsed: boolean;
@@ -30,10 +38,43 @@ export function Sidebar({
   const { resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
+  // 채팅 히스토리 상태 추가
+  const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
+
   // useEffect only runs on the client, so now we can safely show the UI
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // 채팅 히스토리 업데이트 이벤트 리스너 추가
+  useEffect(() => {
+    const handleChatHistoryUpdated = (event: CustomEvent) => {
+      setChatHistory(event.detail.chatHistory);
+    };
+
+    // 이벤트 리스너 등록
+    window.addEventListener(
+      "chatHistoryUpdated",
+      handleChatHistoryUpdated as EventListener
+    );
+
+    // 컴포넌트 언마운트 시 이벤트 리스너 제거
+    return () => {
+      window.removeEventListener(
+        "chatHistoryUpdated",
+        handleChatHistoryUpdated as EventListener
+      );
+    };
+  }, []);
+
+  // 채팅 클릭 핸들러
+  const handleChatClick = (chat: ChatHistory) => {
+    // 채팅 전환 이벤트 발송
+    const event = new CustomEvent("switchChat", {
+      detail: { chat },
+    });
+    window.dispatchEvent(event);
+  };
 
   if (!mounted) {
     return (
@@ -170,20 +211,38 @@ export function Sidebar({
               >
                 Recent Chats
               </h2>
-              {[1, 2, 3, 4, 5].map((i) => (
-                <Button
-                  key={i}
-                  variant="ghost"
-                  className={`w-full justify-start gap-2 ${
-                    isDark
-                      ? "text-white hover:bg-zinc-800"
-                      : "text-gray-700 hover:bg-gray-200"
-                  }`}
+              {chatHistory.length > 0 ? (
+                chatHistory.map((chat) => (
+                  <Button
+                    key={chat.id}
+                    variant="ghost"
+                    className={`w-full justify-start gap-2 ${
+                      isDark
+                        ? "text-white hover:bg-zinc-800"
+                        : "text-gray-700 hover:bg-gray-200"
+                    }`}
+                    onClick={() => handleChatClick(chat)}
+                  >
+                    <MessageSquare size={16} />
+                    <div className="flex flex-col items-start overflow-hidden">
+                      <span className="text-sm font-medium truncate w-full text-left">
+                        {chat.title}
+                      </span>
+                      <span className="text-xs text-gray-500 dark:text-gray-400 truncate w-full text-left">
+                        {chat.lastMessage}
+                      </span>
+                    </div>
+                  </Button>
+                ))
+              ) : (
+                <div
+                  className={`text-sm ${
+                    isDark ? "text-zinc-400" : "text-gray-500"
+                  } py-2`}
                 >
-                  <MessageSquare size={16} />
-                  Chat {i}
-                </Button>
-              ))}
+                  대화 기록이 없습니다
+                </div>
+              )}
             </div>
           </div>
 
@@ -251,21 +310,31 @@ export function Sidebar({
 
           <div className="flex-1 overflow-auto p-3">
             <div className="space-y-3 flex flex-col items-center">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <Button
-                  key={i}
-                  variant="ghost"
-                  size="icon"
-                  className={`h-9 w-9 ${
-                    isDark
-                      ? "text-white hover:bg-zinc-800"
-                      : "text-gray-700 hover:bg-gray-200"
-                  }`}
-                >
-                  <MessageSquare size={16} />
-                  <span className="sr-only">Chat {i}</span>
-                </Button>
-              ))}
+              {chatHistory.length > 0 ? (
+                chatHistory.map((chat) => (
+                  <Button
+                    key={chat.id}
+                    variant="ghost"
+                    size="icon"
+                    className={`h-9 w-9 relative group ${
+                      isDark
+                        ? "text-white hover:bg-zinc-800"
+                        : "text-gray-700 hover:bg-gray-200"
+                    }`}
+                    onClick={() => handleChatClick(chat)}
+                  >
+                    <MessageSquare size={16} />
+                    <span className="sr-only">{chat.title}</span>
+                    <div className="absolute left-full ml-2 px-2 py-1 bg-black text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                      {chat.title}
+                    </div>
+                  </Button>
+                ))
+              ) : (
+                <div className="text-xs text-center text-gray-500 dark:text-gray-400 p-2">
+                  No chats
+                </div>
+              )}
             </div>
           </div>
 
