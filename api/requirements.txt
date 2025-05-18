@@ -4,3 +4,4 @@ pydantic==2.4.2
 python-dotenv==1.0.0
 openai
 python-multipart==0.0.6 
+

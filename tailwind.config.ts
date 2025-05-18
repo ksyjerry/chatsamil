@@ -1,4 +1,4 @@
-import type { Config } from "tailwindcss"
+import type { Config } from "tailwindcss";
 
 const config = {
   darkMode: ["class"],
@@ -73,9 +73,66 @@ const config = {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
       },
+      typography: {
+        DEFAULT: {
+          css: {
+            maxWidth: "none",
+            color: "var(--tw-prose-body)",
+            lineHeight: "1.65",
+            fontWeight: "400",
+            code: {
+              color: "var(--tw-prose-code)",
+              fontWeight: "500",
+              backgroundColor: "var(--tw-prose-pre-bg)",
+              paddingLeft: "0.25em",
+              paddingRight: "0.25em",
+              paddingTop: "0.1em",
+              paddingBottom: "0.1em",
+              borderRadius: "0.25em",
+            },
+            "code::before": {
+              content: '""',
+            },
+            "code::after": {
+              content: '""',
+            },
+            pre: {
+              color: "var(--tw-prose-pre-code)",
+              backgroundColor: "var(--tw-prose-pre-bg)",
+              overflow: "auto",
+              padding: "1rem",
+              borderRadius: "0.375rem",
+              border: "1px solid var(--tw-prose-pre-border)",
+              fontWeight: "500",
+            },
+            "pre code": {
+              backgroundColor: "transparent",
+              borderWidth: "0",
+              borderRadius: "0",
+              padding: "0",
+              fontWeight: "inherit",
+              color: "inherit",
+              fontSize: "inherit",
+              lineHeight: "inherit",
+            },
+            a: {
+              color: "hsl(var(--primary))",
+              textDecoration: "underline",
+              fontWeight: "500",
+            },
+          },
+        },
+        invert: {
+          css: {
+            "--tw-prose-pre-bg": "hsl(215 28% 17%)",
+            "--tw-prose-pre-code": "hsl(210 40% 96.1%)",
+            "--tw-prose-pre-border": "hsl(215 28% 25%)",
+          },
+        },
+      },
     },
   },
-  plugins: [require("tailwindcss-animate")],
-} satisfies Config
+  plugins: [require("tailwindcss-animate"), require("@tailwindcss/typography")],
+} satisfies Config;
 
-export default config
+export default config;
