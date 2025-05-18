@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Send, User, ChevronDown } from "lucide-react";
@@ -50,6 +50,43 @@ export function ChatArea({
   const isMobile = useMobile();
   const [streamingMessage, setStreamingMessage] = useState<string>("");
   const [isStreaming, setIsStreaming] = useState(false);
+
+  // 메시지 컨테이너 참조 생성
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  // 스크롤을 맨 아래로 이동시키는 함수
+  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior, block: "start" });
+    }
+  };
+
+  // 메시지가 추가되거나 업데이트될 때마다 스크롤 조정
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  // 스트리밍 상태가 변경될 때 스크롤 조정
+  useEffect(() => {
+    if (isStreaming) {
+      const interval = setInterval(() => {
+        if (chatContainerRef.current) {
+          const isNearBottom =
+            chatContainerRef.current.scrollHeight -
+              chatContainerRef.current.scrollTop -
+              chatContainerRef.current.clientHeight <
+            100;
+
+          if (isNearBottom) {
+            scrollToBottom("auto");
+          }
+        }
+      }, 100);
+
+      return () => clearInterval(interval);
+    }
+  }, [isStreaming]);
 
   // 사용 가능한 모델 목록
   const [models, setModels] = useState<Model[]>([
@@ -103,6 +140,9 @@ export function ChatArea({
     setIsLoading(true);
     setError(null);
     setStreamingMessage("");
+
+    // 사용자 메시지가 추가된 후 스크롤 조정 (즉시)
+    setTimeout(() => scrollToBottom("auto"), 50);
 
     const newMessageId = messages.length + 2;
 
@@ -225,7 +265,10 @@ export function ChatArea({
           {/* 모델 선택 드롭다운 */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="flex items-center gap-2 h-9">
+              <Button
+                variant="outline"
+                className="flex items-center gap-2 h-9 border-orange-200 hover:border-orange-300 dark:border-orange-800 dark:hover:border-orange-700"
+              >
                 <span>{selectedModel.name}</span>
                 <ChevronDown size={16} />
               </Button>
@@ -237,7 +280,7 @@ export function ChatArea({
                   onClick={() => setSelectedModel(model)}
                   className={
                     selectedModel.id === model.id
-                      ? "bg-gray-100 dark:bg-accent font-medium"
+                      ? "bg-orange-100 dark:bg-orange-900/50 font-medium text-orange-700 dark:text-orange-300"
                       : ""
                   }
                 >
@@ -264,7 +307,10 @@ export function ChatArea({
       </header>
 
       {/* Chat messages */}
-      <div className="flex-1 overflow-auto p-4 space-y-6 bg-white dark:bg-background">
+      <div
+        ref={chatContainerRef}
+        className="flex-1 overflow-auto p-4 space-y-6 bg-white dark:bg-background"
+      >
         {messages.map((message) => (
           <ChatMessage
             key={message.id}
@@ -284,6 +330,8 @@ export function ChatArea({
             <span className="text-sm text-red-500">{error}</span>
           </div>
         )}
+        {/* 스크롤 위치를 조정하기 위한 참조 요소 */}
+        <div ref={messagesEndRef} />
       </div>
 
       {/* Input area */}
@@ -294,7 +342,7 @@ export function ChatArea({
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Type your message..."
-            className="flex-1 border-gray-200 dark:bg-secondary dark:border-secondary"
+            className="flex-1 border-gray-200 dark:bg-secondary dark:border-secondary focus-visible:ring-orange-500 focus-visible:border-orange-500"
             disabled={isLoading}
           />
           <Button
@@ -302,6 +350,7 @@ export function ChatArea({
             size="icon"
             onClick={sendMessage}
             disabled={isLoading}
+            className="bg-orange-500 hover:bg-orange-600 text-white"
           >
             <Send size={18} />
             <span className="sr-only">Send</span>

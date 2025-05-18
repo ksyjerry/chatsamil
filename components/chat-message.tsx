@@ -130,7 +130,8 @@ export function ChatMessage({
           <div
             className={`text-gray-700 dark:text-foreground prose dark:prose-invert 
             prose-headings:font-semibold
-            prose-a:text-blue-600 dark:prose-a:text-blue-300
+            prose-a:text-orange-500 dark:prose-a:text-orange-400
+            prose-a:hover:text-orange-600 dark:prose-a:hover:text-orange-300
             prose-p:my-2
             prose-li:my-0.5
             prose-pre:bg-gray-100 dark:prose-pre:bg-gray-800 prose-pre:border prose-pre:border-gray-200 dark:prose-pre:border-gray-700

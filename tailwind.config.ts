@@ -116,9 +116,12 @@ const config = {
               lineHeight: "inherit",
             },
             a: {
-              color: "hsl(var(--primary))",
+              color: "hsl(25, 95%, 53%)",
               textDecoration: "underline",
               fontWeight: "500",
+              "&:hover": {
+                color: "hsl(25, 95%, 45%)",
+              },
             },
           },
         },
@@ -127,6 +130,12 @@ const config = {
             "--tw-prose-pre-bg": "hsl(215 28% 17%)",
             "--tw-prose-pre-code": "hsl(210 40% 96.1%)",
             "--tw-prose-pre-border": "hsl(215 28% 25%)",
+            a: {
+              color: "hsl(25, 95%, 60%)",
+              "&:hover": {
+                color: "hsl(25, 95%, 70%)",
+              },
+            },
           },
         },
       },
