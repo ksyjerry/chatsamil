@@ -635,6 +635,9 @@ export function ChatArea({
       return;
     }
 
+    // 입력 저장 - API 호출 전에 입력값 저장
+    const currentInput = input.trim();
+
     // 이미지가 화면에 표시되고 있는지 확인 (클라이언트 사이드에서만)
     const hasImage =
       selectedFile ||
@@ -652,7 +655,7 @@ export function ChatArea({
     const userMessage: Message = {
       id: messages.length + 1,
       role: "user",
-      content: input,
+      content: currentInput,
     };
 
     // 첫 메시지인 경우 채팅 히스토리에 추가
@@ -661,7 +664,10 @@ export function ChatArea({
       const newChat: ChatHistory = {
         id: currentChatId,
         title: chatTitle,
-        lastMessage: input.length > 30 ? input.substring(0, 30) + "..." : input,
+        lastMessage:
+          currentInput.length > 30
+            ? currentInput.substring(0, 30) + "..."
+            : currentInput,
         timestamp: new Date(),
       };
 
@@ -677,7 +683,9 @@ export function ChatArea({
             ? {
                 ...chat,
                 lastMessage:
-                  input.length > 30 ? input.substring(0, 30) + "..." : input,
+                  currentInput.length > 30
+                    ? currentInput.substring(0, 30) + "..."
+                    : currentInput,
                 timestamp: new Date(),
               }
             : chat
@@ -685,12 +693,9 @@ export function ChatArea({
       );
     }
 
-    // 웹 검색 모드인 경우 검색 쿼리 설정
+    // 웹 검색 모드인 경우 검색 쿼리 설정 (searchQuery 상태만 업데이트하고 메시지 내용 유지)
     if (webSearchEnabled) {
-      if (isSearchMode) {
-        setSearchQuery(input);
-        userMessage.content = `웹 검색: ${input}`;
-      }
+      setSearchQuery(currentInput);
     }
 
     // 메시지 목록에 사용자 메시지 추가
@@ -706,27 +711,43 @@ export function ChatArea({
     const newMessageId = messages.length + 2;
 
     try {
-      // API 호출 데이터 준비
-      const requestData: any = {
-        messages: [
-          ...messages
-            .filter((msg) => !msg.imageUrl) // 이미지 URL이 없는 메시지만 필터링
-            .filter((msg, index, arr) => {
-              // 이미지에 대한 언급이 있는 시스템 메시지 제거
-              if (
+      // 실제 API 호출에 사용할 메시지 목록 생성 - 매번 새로 생성하여 이전 응답이 섞이지 않도록 함
+      // 웹 검색 모드일 때 특수 처리
+      const filteredMessages = webSearchEnabled
+        ? messages.filter(
+            (msg) =>
+              // 웹 검색 모드에서는 이전 대화 내용을 포함하지 않음 (첫 인사말만 유지)
+              msg.role === "system" &&
+              !msg.content.includes("삼일회계법인") &&
+              !msg.content.includes("웹 검색:") &&
+              !msg.content.includes("웹 검색 활성화") &&
+              !msg.citations // 인용 정보가 있는 메시지 제외
+          )
+        : messages.filter(
+            (msg) =>
+              // 일반 모드에서는 이미지 URL이 있는 메시지와 웹 검색 관련 메시지만 제외
+              !msg.imageUrl &&
+              !(
                 msg.role === "system" &&
                 (msg.content.includes("이미지를") ||
                   msg.content.includes("PwC") ||
                   msg.content.includes("로고") ||
-                  msg.content.toLowerCase().includes("image"))
-              ) {
-                return false;
-              }
-              return true;
-            })
-            .map((msg) => ({ role: msg.role, content: msg.content })),
-          { role: userMessage.role, content: userMessage.content },
-        ],
+                  msg.content.toLowerCase().includes("image") ||
+                  msg.content.includes("삼일회계법인"))
+              )
+          );
+
+      // 사용자 메시지는 항상 추가 (가장 마지막 사용자 메시지)
+      filteredMessages.push(userMessage);
+
+      console.log("API 호출 - 메시지 수:", filteredMessages.length);
+
+      // API 호출 데이터 준비
+      const requestData: any = {
+        messages: filteredMessages.map((msg) => ({
+          role: msg.role,
+          content: msg.content,
+        })),
         model: selectedModel.id,
         temperature: 0.7,
         max_tokens: 1000,
@@ -737,12 +758,11 @@ export function ChatArea({
       if (webSearchEnabled) {
         requestData.enable_web_search = true;
 
-        // 검색 모드인 경우 검색 쿼리 추가
-        if (isSearchMode && searchQuery) {
-          requestData.search_query = searchQuery;
-          // 검색 모드 비활성화
-          setIsSearchMode(false);
-        }
+        // 웹 검색 모드에서는 항상 현재 입력을 검색 쿼리로 설정
+        requestData.search_query = currentInput;
+
+        // 검색 모드 비활성화
+        setIsSearchMode(false);
       }
 
       // 빈 메시지로 시스템 응답 추가
@@ -945,41 +965,6 @@ export function ChatArea({
     }
   };
 
-  // 드롭다운 메뉴 컴포넌트
-  const ModelDropdown = () => (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          className="flex items-center gap-2 h-9 border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600"
-        >
-          <span className="font-medium">모델: </span>
-          <span className="text-gray-900 dark:text-white">
-            {selectedModel.name}
-          </span>
-          <ChevronDown size={16} />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56" sideOffset={5}>
-        <div className="py-1">
-          {models.map((model) => (
-            <DropdownMenuItem
-              key={model.id}
-              onClick={() => handleModelSelect(model)}
-              className={`mb-1 ${
-                selectedModel.id === model.id
-                  ? "bg-gray-100 dark:bg-gray-800 font-medium"
-                  : ""
-              }`}
-            >
-              {model.name}
-            </DropdownMenuItem>
-          ))}
-        </div>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-
   // 새로운 함수: 채팅 제목 편집 시작
   const startTitleEdit = () => {
     setIsEditingTitle(true);
@@ -1076,7 +1061,15 @@ export function ChatArea({
 
   // 웹 검색 토글 핸들러
   const toggleWebSearch = () => {
-    setWebSearchEnabled((prev) => !prev);
+    setWebSearchEnabled((prev) => {
+      // 웹 검색이 비활성화될 때는 검색 모드와 검색 쿼리도 초기화
+      if (prev) {
+        setIsSearchMode(false);
+        setSearchQuery("");
+      }
+      // 대화를 초기화하지 않도록 수정 - 기존 대화 유지
+      return !prev;
+    });
   };
 
   // 검색 모드 토글 핸들러
@@ -1092,11 +1085,41 @@ export function ChatArea({
   };
 
   return (
-    <div className="h-full flex flex-col bg-white dark:bg-background">
+    <div className="h-full flex flex-col bg-white dark:bg-background overflow-hidden">
       {/* Header */}
-      <header className="border-b border-gray-200 dark:border-border p-3 flex items-center justify-between bg-white dark:bg-background">
+      <header className="border-b border-gray-200 dark:border-border py-2 px-3 flex items-center justify-between bg-white dark:bg-background shrink-0">
         <div className="flex items-center">
-          <ModelDropdown />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                className="flex items-center gap-2 h-9 border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600"
+              >
+                <span className="font-medium">모델: </span>
+                <span className="text-gray-900 dark:text-white">
+                  {selectedModel.name}
+                </span>
+                <ChevronDown size={16} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56" sideOffset={5}>
+              <div className="py-1">
+                {models.map((model) => (
+                  <DropdownMenuItem
+                    key={model.id}
+                    onClick={() => handleModelSelect(model)}
+                    className={`mb-1 ${
+                      selectedModel.id === model.id
+                        ? "bg-gray-100 dark:bg-gray-800 font-medium"
+                        : ""
+                    }`}
+                  >
+                    {model.name}
+                  </DropdownMenuItem>
+                ))}
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           {isEditingTitle ? (
             <input
@@ -1121,24 +1144,13 @@ export function ChatArea({
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2 mr-2">
-            <Globe size={16} className="text-gray-500 dark:text-gray-400" />
-            <Switch
-              checked={webSearchEnabled}
-              onCheckedChange={toggleWebSearch}
-              className="data-[state=checked]:bg-orange-500"
-            />
-            <span className="text-sm text-gray-500 dark:text-gray-400">
-              웹 검색
-            </span>
-          </div>
           <ThemeToggle />
           <Button
             variant="ghost"
             size="icon"
-            className="h-10 w-10 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-secondary dark:hover:bg-secondary/80"
+            className="h-9 w-9 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-secondary dark:hover:bg-secondary/80"
           >
-            <User size={20} />
+            <User size={18} />
             <span className="sr-only">Login</span>
           </Button>
         </div>
@@ -1147,7 +1159,7 @@ export function ChatArea({
       {/* Chat messages */}
       <div
         ref={chatContainerRef}
-        className="flex-1 overflow-auto p-4 space-y-6 bg-white dark:bg-background"
+        className="flex-1 overflow-auto p-4 space-y-4 bg-white dark:bg-background"
       >
         {messages.map((message, index) => {
           // 이미지 표시 여부 결정:
@@ -1194,12 +1206,12 @@ export function ChatArea({
 
       {/* 이미지 미리보기 영역 */}
       {previewUrl && (
-        <div className="p-2 bg-gray-50 dark:bg-secondary/50">
+        <div className="p-1 bg-gray-50 dark:bg-secondary/50 shrink-0">
           <div className="relative max-w-xs mx-auto">
             <img
               src={previewUrl}
               alt="Preview"
-              className="h-32 mx-auto rounded-lg object-contain"
+              className="h-28 mx-auto rounded-lg object-contain"
             />
             <button
               onClick={handleRemoveFile}
@@ -1213,7 +1225,7 @@ export function ChatArea({
       )}
 
       {/* Input area */}
-      <div className="p-4 bg-white dark:bg-background">
+      <div className="p-3 bg-white dark:bg-background border-t border-gray-200 dark:border-border shrink-0">
         <div className="flex gap-2 max-w-3xl mx-auto">
           <input
             type="file"
@@ -1235,34 +1247,47 @@ export function ChatArea({
               <Image size={18} />
               <span className="sr-only">Upload Image</span>
             </Button>
-            <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 p-2 bg-black text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+            <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 p-2 bg-black text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
               이미지 업로드 (최대 20MB)
             </div>
           </div>
 
-          {webSearchEnabled && (
-            <div className="group relative">
-              <Button
-                type="button"
-                size="icon"
-                variant={isSearchMode ? "default" : "outline"}
-                onClick={toggleSearchMode}
-                disabled={isLoading}
-                className={`${
-                  isSearchMode
-                    ? "bg-orange-500 text-white hover:bg-orange-600"
-                    : "border-gray-200 dark:border-secondary hover:bg-gray-100 dark:hover:bg-secondary/80"
-                }`}
-                title="웹 검색"
-              >
-                <Search size={18} />
-                <span className="sr-only">Web Search</span>
-              </Button>
-              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 p-2 bg-black text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                웹 검색 수행
-              </div>
+          <div className="group relative">
+            <Button
+              type="button"
+              size="icon"
+              variant={webSearchEnabled ? "default" : "outline"}
+              onClick={() => {
+                toggleWebSearch();
+                // 웹 검색이 활성화될 때 바로 검색 모드도 활성화
+                if (!webSearchEnabled) {
+                  setIsSearchMode(true);
+                  // 웹 검색 활성화할 때 대화 초기화하지 않음 (제목만 변경)
+                  setChatTitle("웹 검색 활성화됨");
+                  setTimeout(() => {
+                    inputRef.current?.focus();
+                  }, 100);
+                } else {
+                  setIsSearchMode(false);
+                  // 웹 검색이 비활성화될 때도 새 대화 시작하지 않고 현재 대화 유지
+                  setChatTitle("일반 대화");
+                }
+              }}
+              disabled={isLoading}
+              className={`${
+                webSearchEnabled
+                  ? "bg-orange-500 text-white hover:bg-orange-600"
+                  : "border-gray-200 dark:border-secondary hover:bg-gray-100 dark:hover:bg-secondary/80"
+              }`}
+              title={webSearchEnabled ? "웹 검색 끄기" : "웹 검색 켜기"}
+            >
+              <Globe size={18} />
+              <span className="sr-only">Toggle Web Search</span>
+            </Button>
+            <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 p-2 bg-black text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
+              {webSearchEnabled ? "웹 검색 끄기" : "웹 검색 켜기"}
             </div>
-          )}
+          </div>
 
           <Input
             ref={inputRef}
@@ -1270,7 +1295,7 @@ export function ChatArea({
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
-              isSearchMode
+              webSearchEnabled
                 ? "웹 검색어를 입력하세요..."
                 : selectedFile
                 ? "이미지에 대한 질문을 입력하세요..."
@@ -1296,7 +1321,8 @@ export function ChatArea({
               }
             }}
             disabled={isLoading}
-            className="bg-orange-500 hover:bg-orange-600 text-white"
+            className="bg-orange-500 hover:bg-orange-600 text-white relative group"
+            title={webSearchEnabled ? "웹 검색 실행" : "메시지 전송"}
           >
             {isLoading ? (
               <Loader2 size={18} className="animate-spin" />
@@ -1304,6 +1330,9 @@ export function ChatArea({
               <Send size={18} />
             )}
             <span className="sr-only">Send</span>
+            <div className="absolute bottom-full right-0 mb-2 p-2 bg-black text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
+              {webSearchEnabled ? "웹 검색 실행" : "메시지 전송"}
+            </div>
           </Button>
         </div>
         {selectedFile && (

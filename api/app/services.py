@@ -11,23 +11,17 @@ openai.api_key = OPENAI_API_KEY
 
 async def generate_chat_response(request: ChatRequest) -> ChatResponse:
     """
-    OpenAI API를 사용하여 채팅 응답을 생성합니다.
+    대화 응답을 생성합니다.
     
     Args:
         request: ChatRequest 모델의 요청 데이터
     
     Returns:
-        ChatResponse: 생성된 응답
+        ChatResponse: 응답 데이터
     """
-    # 스트리밍 요청이면 스트리밍 응답을 반환
-    if request.stream:
-        # 비동기 이터레이터 생성
-        stream_iterator = await generate_streaming_response(request)
-        return stream_iterator
-    
     try:
         # 모델 설정
-        model = request.model or GPT_MODEL
+        model = request.model or "gpt-4.1"
         
         # 모델 ID 매핑 (필요한 경우)
         model_mapping = {
@@ -40,20 +34,26 @@ async def generate_chat_response(request: ChatRequest) -> ChatResponse:
         # 모델 ID 변환
         api_model = model_mapping.get(model, model)
         
-        # OpenAI API 호출
+        # OpenAI 클라이언트 초기화
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
         
-        # 입력 메시지 형식 변환
+        # 입력 메시지 형식 변환 및 필터링
         input_messages = []
         for msg in request.messages:
+            # 이전 웹 검색 관련 메시지 필터링 (삼일회계법인 등 특정 키워드 포함된 메시지 제외)
+            if msg.role == "system" and any(keyword in msg.content for keyword in ["삼일회계법인", "웹 검색:", "검색 결과:"]):
+                print(f"Filtering out system message containing search keywords: {msg.content[:30]}...")
+                continue
+            
             input_messages.append({
                 "role": msg.role,
                 "content": msg.content
             })
         
-        # 웹 검색 기능 지원 체크
-        tools = None
+        # 웹 검색 도구와 설정 준비
+        tools = []
         tool_choice = None
+        
         if request.enable_web_search:
             # 웹 검색을 지원하지 않는 모델의 경우 gpt-4.1로 변경
             if api_model in ["gpt-4o-mini", "gpt-3.5-turbo"]:
@@ -153,10 +153,11 @@ async def generate_chat_response(request: ChatRequest) -> ChatResponse:
             usage=usage,
             citations=citations
         )
-    
+        
     except Exception as e:
         # 에러 처리
-        error_message = f"Error generating response: {str(e)}"
+        error_message = f"Error generating chat response: {str(e)}"
+        print(f"Chat error: {str(e)}")
         return ChatResponse(
             response=error_message,
             model=model,
@@ -446,16 +447,16 @@ async def analyze_image_streaming(request: ImageAnalysisRequest):
 
 async def generate_streaming_response(request: ChatRequest):
     """
-    OpenAI API를 사용하여 스트리밍 응답을 생성하는 비동기 함수.
+    대화 응답을 생성하고 스트리밍 형식으로 반환합니다.
     
     Args:
-        request: ChatRequest 객체
-        
+        request: ChatRequest 모델의 요청 데이터
+    
     Returns:
-        스트리밍 응답 이터레이터
+        스트리밍 응답 제너레이터
     """
     # 모델 설정
-    model = request.model or GPT_MODEL
+    model = request.model or "gpt-4.1"
     
     # 모델 ID 매핑 (필요한 경우)
     model_mapping = {
@@ -476,18 +477,59 @@ async def generate_streaming_response(request: ChatRequest):
             # 지역 변수로 api_model을 복사
             local_api_model = api_model
             
-            # 입력 메시지 형식 변환
-            input_messages = []
+            # 최신 사용자 메시지와 웹 검색 관련 상태 추출
+            last_user_message = None
+            is_web_search = request.enable_web_search
+            is_search_query = request.search_query is not None and len(request.search_query) > 0
+            
+            for msg in reversed(request.messages):
+                if msg.role == "user":
+                    last_user_message = msg.content
+                    break
+            
+            # 입력 메시지 형식 변환 및 필터링
+            filtered_messages = []
+            found_search_result = False
+            
+            # 특수 필터링 단어 리스트
+            filter_keywords = [
+                "삼일회계법인", "주소는", "웹 검색:", "검색 결과:", 
+                "bizbank.co.kr", "oldee.kr", "ytn.co.kr", "sedaily.com"
+            ]
+            
+            # 이전 웹 검색 결과 확인을 위한 변수
+            prev_system_messages = []
+            
             for msg in request.messages:
-                input_messages.append({
+                # 시스템 메시지를 임시 저장
+                if msg.role == "system":
+                    prev_system_messages.append(msg.content)
+                    
+                    # 이전 검색 결과인지 확인 (필터링 키워드 포함 여부)
+                    if any(keyword in msg.content for keyword in filter_keywords):
+                        print(f"Filtering out system message with keywords: {msg.content[:50]}...")
+                        found_search_result = True
+                        continue
+                
+                # 사용자 메시지 중 웹 검색 접두사 제거
+                if msg.role == "user" and msg.content.startswith("웹 검색:"):
+                    # 웹 검색 접두사 제거하여 원래 질문만 포함
+                    msg.content = msg.content.replace("웹 검색:", "").strip()
+                
+                # 이전 메시지 필터링 확인 완료 후 추가
+                filtered_messages.append({
                     "role": msg.role,
                     "content": msg.content
                 })
             
+            # 이전에 웹 검색 결과가 있었는지 디버그 출력
+            if found_search_result:
+                print(f"Found and filtered previous web search results")
+            
             # API 호출 준비
             api_params = {
                 "model": local_api_model,
-                "input": input_messages,
+                "input": filtered_messages,
                 "temperature": request.temperature,
                 "max_output_tokens": request.max_tokens,
                 "stream": True
@@ -518,8 +560,10 @@ async def generate_streaming_response(request: ChatRequest):
                 # 특정 검색어가 있는 경우 마지막 메시지를 수정
                 if request.search_query:
                     # 마지막 메시지를 검색어로 변경
-                    input_messages[-1]["content"] = request.search_query
-                    api_params["input"] = input_messages
+                    if filtered_messages:
+                        filtered_messages[-1]["content"] = request.search_query
+                        api_params["input"] = filtered_messages
+                    print(f"Debug - Using search query: {request.search_query}")
             
             # 새로운 응답 API 호출 (스트리밍)
             stream = client.responses.create(**api_params)
