@@ -124,9 +124,13 @@ export function ChatMessage({
           <Bot className="h-5 w-5 text-white" />
         )}
       </Avatar>
-      <div className={`flex-1 ${isUser ? "text-right" : ""}`}>
+      <div
+        className={`flex-1 flex items-center ${
+          isUser ? "justify-end" : "justify-start"
+        }`}
+      >
         {isUser ? (
-          <div className="text-gray-700 dark:text-foreground whitespace-pre-line">
+          <div className="text-gray-700 dark:text-foreground whitespace-pre-line text-right">
             {message.imageUrl && showImage && (
               <div
                 className={`mb-2 ${isUser ? "ml-auto" : "mr-auto"} max-w-xs`}
