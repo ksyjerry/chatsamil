@@ -1,6 +1,6 @@
 import openai
 from .config import OPENAI_API_KEY, GPT_MODEL
-from .models import ChatMessage, ChatRequest, ChatResponse
+from .models import ChatMessage, ChatRequest, ChatResponse, ImageAnalysisRequest, ImageAnalysisResponse
 from fastapi.responses import StreamingResponse
 import json
 import asyncio
@@ -55,6 +55,133 @@ async def generate_chat_response(request: ChatRequest) -> ChatResponse:
         return ChatResponse(
             response=error_message,
             model=model,
+            usage={"error": str(e)}
+        )
+
+
+async def analyze_image(request: ImageAnalysisRequest) -> ImageAnalysisResponse:
+    """
+    OpenAI API를 사용하여 이미지를 분석합니다.
+    
+    Args:
+        request: ImageAnalysisRequest 모델의 요청 데이터
+    
+    Returns:
+        ImageAnalysisResponse: 이미지 분석 결과
+    """
+    try:
+        # 모델 설정 (기본값: GPT-4.1)
+        model = request.model or "gpt-4.1"
+        
+        # OpenAI 클라이언트 초기화
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        
+        # 이미지 URL 확인 및 처리
+        image_url = request.image_url
+        base64_image = None
+        
+        print(f"Debug - Model: {model}")
+        
+        # 이미지 URL이 유효한지 확인
+        if not image_url:
+            raise ValueError("유효한 이미지 URL이 필요합니다.")
+        
+        # URL이 base64 형식인지 확인하고 처리
+        if image_url.startswith('data:image/'):
+            print("Debug - Processing base64 image")
+            
+            # 이미지 형식 확인
+            try:
+                content_type = image_url.split(';')[0].split(':')[1]
+                print(f"Debug - Image content type: {content_type}")
+                
+                # 지원되는 형식 확인
+                if content_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
+                    print(f"Warning - Content type {content_type} may not be supported")
+            except Exception as e:
+                print(f"Debug - Error parsing image content type: {str(e)}")
+            
+            # Base64 데이터 추출 ("data:image/jpeg;base64," 부분 제거)
+            try:
+                base64_data = image_url.split(',')[1]
+                print(f"Debug - Base64 data length: {len(base64_data)}")
+            except Exception as e:
+                print(f"Debug - Error extracting base64 data: {str(e)}")
+                raise ValueError("이미지 URL 형식이 올바르지 않습니다. 'data:image/xxx;base64,' 형식이어야 합니다.")
+        else:
+            print(f"Debug - Image URL is not base64 format")
+        
+        # API 호출을 위한 메시지 구성 - OpenAI 예제 코드 방식으로 처리
+        # 메시지 구성
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text", 
+                        "text": request.prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_url,
+                            "detail": request.detail
+                        }
+                    }
+                ]
+            }
+        ]
+        
+        # OpenAI API 호출
+        print(f"Debug - Calling OpenAI API with model: {model}")
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=request.max_tokens
+            )
+            
+            # 응답 파싱
+            content = response.choices[0].message.content
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens
+            }
+            
+            print(f"Debug - API call successful, received content of length: {len(content)}")
+            
+            return ImageAnalysisResponse(
+                response=content,
+                model=model,
+                usage=usage
+            )
+        except openai.APIError as e:
+            error_message = str(e)
+            print(f"OpenAI API Error: {error_message}")
+            
+            # 이미지 형식 오류 감지
+            if "invalid_image_format" in error_message:
+                print("Debug - Invalid image format detected in API response")
+                error_detail = "이미지 형식이 지원되지 않습니다. JPEG, PNG, GIF, WEBP 형식의 이미지를 사용해주세요."
+            else:
+                error_detail = f"OpenAI API 오류: {error_message}"
+            
+            return ImageAnalysisResponse(
+                response=f"이미지 분석 중 오류가 발생했습니다: {error_detail}",
+                model=model,
+                usage={"error": error_message}
+            )
+    
+    except Exception as e:
+        # 상세 에러 메시지 로깅
+        error_message = f"Error analyzing image: {str(e)}"
+        print(f"Image analysis error: {str(e)}")
+        
+        # 사용자에게 반환할 응답 작성
+        return ImageAnalysisResponse(
+            response=error_message,
+            model=model or "gpt-4.1",
             usage={"error": str(e)}
         )
 

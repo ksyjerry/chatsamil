@@ -10,6 +10,7 @@ interface Message {
   id: number;
   role: "user" | "system";
   content: string;
+  imageUrl?: string;
 }
 
 interface ChatMessageProps {
@@ -124,6 +125,17 @@ export function ChatMessage({
       <div className={`flex-1 ${isUser ? "text-right" : ""}`}>
         {isUser ? (
           <div className="text-gray-700 dark:text-foreground whitespace-pre-line">
+            {message.imageUrl && (
+              <div
+                className={`mb-2 ${isUser ? "ml-auto" : "mr-auto"} max-w-xs`}
+              >
+                <img
+                  src={message.imageUrl}
+                  alt="Uploaded image"
+                  className="rounded-lg object-contain max-h-64 border border-gray-200 dark:border-gray-700 shadow-sm"
+                />
+              </div>
+            )}
             {message.content}
           </div>
         ) : (
