@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -11,6 +11,7 @@ import {
   Upload,
   Loader2,
   X,
+  PlusCircle,
 } from "lucide-react";
 import { ChatMessage } from "@/components/chat-message";
 import { useMobile } from "@/hooks/use-mobile";
@@ -78,14 +79,12 @@ export function ChatArea({
   sidebarCollapsed,
 }: ChatAreaProps) {
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<Message[]>([
-    { id: 1, role: "system", content: "How can I help you today?" },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isMobile = useMobile();
   const [streamingMessage, setStreamingMessage] = useState<string>("");
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(true);
 
   // 이미지 업로드 관련 상태 추가
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -101,6 +100,67 @@ export function ChatArea({
   // 상태 변화 추적을 위한 ref 추가
   const prevLoadingRef = useRef<boolean>(false);
   const prevStreamingRef = useRef<boolean>(false);
+
+  // 무언가 표시 중인지 확인하는 ref 추가
+  const resetInProgressRef = useRef<boolean>(false);
+
+  // 채팅ID를 추적하는 상태 추가
+  const [chatId, setChatId] = useState<number>(1);
+
+  // 전역 newChat 이벤트 리스너 추가
+  useEffect(() => {
+    // 이벤트 리스너 함수 생성
+    const handleNewChatEvent = () => {
+      console.log("New Chat 이벤트 감지됨!");
+      startNewChat();
+    };
+
+    // 이벤트 리스너 등록
+    window.addEventListener("newChat", handleNewChatEvent);
+
+    // 컴포넌트 언마운트 시 이벤트 리스너 제거
+    return () => {
+      window.removeEventListener("newChat", handleNewChatEvent);
+    };
+  }, []); // 빈 의존성 배열로 컴포넌트 마운트/언마운트 시에만 실행
+
+  // 초기 인사말 설정을 위한 함수
+  const showInitialGreeting = useCallback(() => {
+    // 컴포넌트 마운트 시 초기 메시지 설정
+    const initialMessage: Message = {
+      id: 1,
+      role: "system",
+      content: "무엇을 도와드릴까요?",
+    };
+
+    // 스트리밍 효과를 위해 빈 메시지로 시작
+    setMessages([{ ...initialMessage, content: "" }]);
+    setIsStreaming(true);
+
+    // 점진적으로 글자를 추가하여 스트리밍 효과 구현
+    let text = "무엇을 도와드릴까요?";
+    let currentIndex = 0;
+
+    const interval = setInterval(() => {
+      if (currentIndex <= text.length) {
+        setMessages([
+          { ...initialMessage, content: text.substring(0, currentIndex) },
+        ]);
+        currentIndex++;
+      } else {
+        setIsStreaming(false);
+        clearInterval(interval);
+      }
+    }, 50);
+
+    return interval;
+  }, []);
+
+  // 컴포넌트 마운트 시 초기 인사말 표시
+  useEffect(() => {
+    const interval = showInitialGreeting();
+    return () => clearInterval(interval);
+  }, [chatId, showInitialGreeting]);
 
   // AI 응답이 끝나면 입력창으로 포커스 이동
   useEffect(() => {
@@ -666,6 +726,31 @@ export function ChatArea({
     }
   };
 
+  // 채팅 초기화 함수
+  const startNewChat = () => {
+    // 모든 상태 초기화
+    setSelectedFile(null);
+    setPreviewUrl(null);
+    setError(null);
+    setStreamingMessage("");
+    setInput("");
+    setIsLoading(false);
+    setIsStreaming(false);
+    setMessages([]);
+
+    // chatId를 증가시켜 새로운 useEffect 트리거
+    setChatId((prev) => prev + 1);
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+
+    // 포커스 설정
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 500);
+  };
+
   return (
     <div className="h-full flex flex-col bg-white dark:bg-background">
       {/* Header */}
@@ -700,6 +785,16 @@ export function ChatArea({
           </DropdownMenu>
 
           <h2 className="font-semibold ml-3">Current Chat</h2>
+
+          {/* New Chat 버튼 추가 */}
+          <Button
+            onClick={startNewChat}
+            variant="ghost"
+            className="ml-4 flex items-center gap-2 h-8 text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white"
+          >
+            <PlusCircle size={16} />
+            <span>New Chat</span>
+          </Button>
         </div>
 
         <div className="flex items-center gap-2">

@@ -150,6 +150,11 @@ export function Sidebar({
                   : "bg-white text-gray-700 hover:bg-gray-50 border-gray-200"
               }`}
               variant="outline"
+              onClick={() => {
+                // 전역 이벤트 발생
+                const newChatEvent = new CustomEvent("newChat");
+                window.dispatchEvent(newChatEvent);
+              }}
             >
               <PlusCircle size={16} />
               New Chat
@@ -233,6 +238,11 @@ export function Sidebar({
               }`}
               variant="outline"
               size="icon"
+              onClick={() => {
+                // 전역 이벤트 발생
+                const newChatEvent = new CustomEvent("newChat");
+                window.dispatchEvent(newChatEvent);
+              }}
             >
               <PlusCircle size={16} />
               <span className="sr-only">New Chat</span>
